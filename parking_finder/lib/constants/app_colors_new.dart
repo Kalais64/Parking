@@ -61,6 +61,6 @@ class AppColorsNew {
   
   // Button colors
   static const Color buttonPrimary = Color(0xFF32CD32);
-  static const Color buttonText = Color(0xFF000000);
+  static const Color buttonText = Color(0xFFFFFFFF);
   static const Color buttonDisabled = Color(0xFF444444);
 }

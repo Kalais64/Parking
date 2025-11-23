@@ -359,6 +359,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }) {
     return Card(
       elevation: 0,
+      color: Colors.white.withOpacity(0.06),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
       ),
@@ -392,7 +393,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: Colors.black87,
+                        color: Colors.white,
                       ),
                     ),
                     const SizedBox(height: 2),
@@ -400,7 +401,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       subtitle,
                       style: TextStyle(
                         fontSize: 13,
-                        color: Colors.grey[600],
+                        color: Colors.white70,
                       ),
                     ),
                   ],
@@ -420,10 +421,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Widget _buildFeaturesInfo() {
     return Card(
+      color: Colors.white.withOpacity(0.1),
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: Colors.grey[200]!),
+        side: BorderSide(color: Colors.white.withOpacity(0.2)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -435,7 +437,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
-                color: AppColorsNew.textPrimary,
+                color: Colors.white,
               ),
             ),
             const SizedBox(height: 16),
@@ -499,7 +501,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 style: const TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
-                  color: Colors.black87,
+                  color: Colors.white,
                 ),
               ),
               const SizedBox(height: 2),
@@ -507,7 +509,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 description,
                 style: TextStyle(
                   fontSize: 12,
-                  color: Colors.grey[600],
+                  color: Colors.grey[300],
                 ),
               ),
             ],

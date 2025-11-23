@@ -11,6 +11,7 @@ import '../../services/audio_navigation_service.dart';
 import '../../widgets/voice_search_widget.dart';
 import '../../widgets/voice_search_dialog.dart';
 import '../../widgets/navigation_control_widget.dart';
+import '../../widgets/filter_dialog.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -77,17 +78,13 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: false,
         title: Text(_titles[_selectedIndex]),
-        backgroundColor: AppColorsNew.background,
+        backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
         elevation: 0,
         actions: [
           if (_selectedIndex == 0) ...[
-            IconButton(
-              icon: const Icon(Icons.mic),
-              onPressed: _showVoiceSearchDialog,
-              tooltip: 'Cari dengan suara',
-            ),
             IconButton(
               icon: const Icon(Icons.search),
               onPressed: () {
@@ -100,9 +97,9 @@ class _HomeScreenState extends State<HomeScreen> {
             IconButton(
               icon: const Icon(Icons.filter_list),
               onPressed: () {
-                // TODO: Implement filter functionality
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Fitur filter akan segera tersedia')),
+                showDialog(
+                  context: context,
+                  builder: (context) => const FilterDialog(),
                 );
               },
             ),
@@ -120,7 +117,10 @@ class _HomeScreenState extends State<HomeScreen> {
         currentIndex: _selectedIndex,
         onTap: _onItemTapped,
         selectedItemColor: AppColorsNew.accent,
-        unselectedItemColor: Colors.grey,
+        unselectedItemColor: AppColorsNew.textSecondary,
+        backgroundColor: AppColorsNew.surface.withValues(alpha: 0.9),
+        type: BottomNavigationBarType.fixed,
+        elevation: 0,
         items: const [
           BottomNavigationBarItem(
             icon: Icon(Icons.map),
@@ -139,6 +139,7 @@ class _HomeScreenState extends State<HomeScreen> {
       floatingActionButton: _selectedIndex == 0
           ? Column(
               mainAxisAlignment: MainAxisAlignment.end,
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 // Voice search button
                 FloatingActionButton(

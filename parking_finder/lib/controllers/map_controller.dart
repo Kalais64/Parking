@@ -61,10 +61,21 @@ class MapController extends ChangeNotifier {
   // Web map specific getters
   List<LatLng> get navigationRoute => _currentRoute;
 
-  // Initialize map controller
+  bool _initialized = false;
+
+  MapController() {
+    _ensureInitialized();
+  }
+
+  void _ensureInitialized() {
+    if (_initialized) return;
+    _initialized = true;
+    _loadInitialData();
+  }
+
   void onMapCreated(GoogleMapController controller) {
     _mapController = controller;
-    _loadInitialData();
+    _ensureInitialized();
   }
 
   // Load initial data
@@ -108,6 +119,18 @@ class MapController extends ChangeNotifier {
 
     _parkingLocations = DummyDataService.getEnhancedParkingLocations();
     _updateMarkers();
+    notifyListeners();
+  }
+
+  void applyPriceFilter(int minPrice, int maxPrice) {
+    if (_parkingLocations.isEmpty) {
+      _parkingLocations = DummyDataService.getEnhancedParkingLocations();
+    }
+    _parkingLocations = _parkingLocations
+        .where((p) => p.pricePerHour >= minPrice && p.pricePerHour <= maxPrice)
+        .toList();
+    _updateMarkers();
+    notifyListeners();
   }
 
   // Add user location marker

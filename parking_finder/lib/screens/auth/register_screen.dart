@@ -30,6 +30,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
       backgroundColor: AppColorsNew.background,
       body: Container(
         decoration: const BoxDecoration(
@@ -66,6 +74,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   // Name Field
                   TextFormField(
                     controller: _nameController,
+                    style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
                       labelText: 'Nama Lengkap',
                       prefixIcon: const Icon(Icons.person),
@@ -82,6 +91,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   // Email Field
                   TextFormField(
                     controller: _emailController,
+                    style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
                       labelText: 'Email',
                       prefixIcon: const Icon(Icons.email),
@@ -102,6 +112,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   // Password Field
                   TextFormField(
                     controller: _passwordController,
+                    style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
                       labelText: 'Password',
                       prefixIcon: const Icon(Icons.lock),
@@ -132,6 +143,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   // Confirm Password Field
                   TextFormField(
                     controller: _confirmPasswordController,
+                    style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
                       labelText: 'Konfirmasi Password',
                       prefixIcon: const Icon(Icons.lock_outline),

@@ -43,6 +43,14 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
       backgroundColor: AppColorsNew.background,
       body: Container(
         decoration: const BoxDecoration(
@@ -239,6 +247,7 @@ class _LoginScreenState extends State<LoginScreen> {
     return TextFormField(
       controller: _emailController,
       keyboardType: TextInputType.emailAddress,
+      style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         labelText: 'Email',
         hintText: 'Masukkan email Anda',
@@ -296,6 +305,7 @@ class _LoginScreenState extends State<LoginScreen> {
     return TextFormField(
       controller: _passwordController,
       obscureText: _obscurePassword,
+      style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         labelText: 'Password',
         hintText: 'Masukkan password Anda',

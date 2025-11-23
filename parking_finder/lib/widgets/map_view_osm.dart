@@ -30,11 +30,9 @@ class _MapViewOSMState extends State<MapViewOSM> {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider.value(
-      value: app_controller.MapController(),
-      child: Consumer<app_controller.MapController>(
-        builder: (context, controller, child) {
-          return Scaffold(
+    return Consumer<app_controller.MapController>(
+      builder: (context, controller, child) {
+        return Scaffold(
             backgroundColor: AppColorsNew.background,
             body: Container(
               decoration: const BoxDecoration(
@@ -244,7 +242,6 @@ class _MapViewOSMState extends State<MapViewOSM> {
             ),
           );
         },
-      ),
     );
   }
 

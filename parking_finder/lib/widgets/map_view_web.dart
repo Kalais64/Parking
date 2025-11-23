@@ -14,20 +14,6 @@ class MapViewWeb extends StatefulWidget {
 }
 
 class _MapViewWebState extends State<MapViewWeb> {
-  late app_controller.MapController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = app_controller.MapController();
-    // For web, we'll use a different approach without Google Maps
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -283,7 +269,7 @@ class _MapViewWebState extends State<MapViewWeb> {
                 bottom: 0,
                 left: 0,
                 right: 0,
-                child: _buildSelectedParkingCard(controller.selectedParking!),
+                child: _buildSelectedParkingCard(controller.selectedParking!, controller),
               ),
           ],
         );
@@ -412,7 +398,7 @@ class _MapViewWebState extends State<MapViewWeb> {
     );
   }
 
-  Widget _buildSelectedParkingCard(ParkingLocation parking) {
+  Widget _buildSelectedParkingCard(ParkingLocation parking, app_controller.MapController controller) {
     return Card(
       margin: const EdgeInsets.all(16),
       child: Padding(
@@ -434,7 +420,7 @@ class _MapViewWebState extends State<MapViewWeb> {
                 ),
                 IconButton(
                   icon: const Icon(Icons.close),
-                  onPressed: () => _controller.clearSelectedParking(),
+                  onPressed: () => controller.clearSelectedParking(),
                 ),
               ],
             ),
@@ -478,7 +464,7 @@ class _MapViewWebState extends State<MapViewWeb> {
               children: [
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: () => _navigateToParking(parking),
+                    onPressed: () => _navigateToParking(parking, controller),
                     icon: const Icon(Icons.directions),
                     label: const Text('Navigasi'),
                     style: ElevatedButton.styleFrom(
@@ -512,9 +498,9 @@ class _MapViewWebState extends State<MapViewWeb> {
     }
   }
 
-  void _navigateToParking(ParkingLocation parking) {
+  void _navigateToParking(ParkingLocation parking, app_controller.MapController controller) {
     // Start navigation using the map controller
-    _controller.startNavigationToParking(parking);
+    controller.startNavigationToParking(parking);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Navigasi ke ${parking.name}')),
     );
