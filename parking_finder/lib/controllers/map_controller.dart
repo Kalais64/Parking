@@ -177,6 +177,39 @@ class MapController extends ChangeNotifier {
     notifyListeners();
   }
 
+  // Update real-time availability for a parking location
+  void updateParkingRealtime(String id, int available, int total) {
+    final index = _parkingLocations.indexWhere((p) => p.id == id);
+    if (index != -1) {
+      final old = _parkingLocations[index];
+      
+      // Determine new status
+      ParkingStatus newStatus;
+      if (available == 0) {
+        newStatus = ParkingStatus.full;
+      } else if (available < total * 0.2) {
+        newStatus = ParkingStatus.gettingFull;
+      } else {
+        newStatus = ParkingStatus.available;
+      }
+
+      _parkingLocations[index] = old.copyWith(
+        availableSpots: available,
+        totalCapacity: total,
+        status: newStatus,
+        lastUpdated: DateTime.now(),
+      );
+      
+      // If the selected parking is the one being updated, update it too
+      if (_selectedParking?.id == id) {
+        _selectedParking = _parkingLocations[index];
+      }
+
+      _updateMarkers();
+      notifyListeners();
+    }
+  }
+
   // Create parking marker
   Marker _createParkingMarker(ParkingLocation parking) {
     final hue = _getMarkerHue(parking.status);

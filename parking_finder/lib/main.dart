@@ -23,6 +23,8 @@ import 'services/location_service.dart';
 import 'controllers/map_controller.dart';
 import 'models/user_location.dart';
 
+import 'controllers/parking_detection_controller.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
@@ -48,6 +50,14 @@ class ParkingFinderApp extends StatelessWidget {
         Provider<AuthService>(create: (_) => AuthService()),
         Provider<NFCPaymentService>(create: (_) => NFCPaymentService()),
         ChangeNotifierProvider<MapController>(create: (_) => MapController()),
+        ChangeNotifierProxyProvider<MapController, ParkingDetectionController>(
+          create: (context) => ParkingDetectionController(),
+          update: (context, mapController, parkingController) {
+            parkingController ??= ParkingDetectionController();
+            parkingController.setMapController(mapController);
+            return parkingController;
+          },
+        ),
         Provider<LocationService>(create: (_) => LocationService()),
         Provider<VoiceService>(create: (_) => VoiceService(), lazy: false),
         Provider<AudioNavigationService>(

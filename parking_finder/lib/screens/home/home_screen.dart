@@ -5,6 +5,7 @@ import '../../widgets/map_view_web.dart';
 import '../../widgets/map_view_osm.dart';
 import '../../screens/favorites/favorites_screen.dart';
 import '../../screens/profile/profile_screen.dart';
+import '../../screens/simulation/parking_simulation_screen.dart';
 import '../../constants/app_colors_new.dart';
 import '../../services/voice_integration_manager.dart';
 import '../../services/audio_navigation_service.dart';
@@ -85,6 +86,16 @@ class _HomeScreenState extends State<HomeScreen> {
         elevation: 0,
         actions: [
           if (_selectedIndex == 0) ...[
+            IconButton(
+              icon: const Icon(Icons.camera_alt),
+              tooltip: 'Simulasi Deteksi Parkir',
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const ParkingSimulationScreen()),
+                );
+              },
+            ),
             IconButton(
               icon: const Icon(Icons.search),
               onPressed: () {
