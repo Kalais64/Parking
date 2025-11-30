@@ -48,12 +48,16 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
     final bool hasImageFile = controller.selectedImageFile != null;
     final Widget inner = controller.isImageMode && (hasImageBytes || hasImageFile)
         ? (hasImageBytes
-            ? Image.memory(controller.selectedImageBytes!, fit: BoxFit.fill)
-            : Image.file(controller.selectedImageFile!, fit: BoxFit.fill))
+            ? Image.memory(controller.selectedImageBytes!, fit: BoxFit.contain)
+            : Image.file(controller.selectedImageFile!, fit: BoxFit.contain))
         : (controller.isCameraInitialized && controller.cameraController != null)
             ? CameraPreview(controller.cameraController!)
             : const Center(child: CircularProgressIndicator());
-    return Container(key: _previewKey, child: inner);
+    final double? aspect = controller.previewAspectRatio;
+    final Widget wrapped = aspect != null
+        ? AspectRatio(aspectRatio: aspect, child: inner)
+        : inner;
+    return Container(key: _previewKey, child: wrapped);
   }
   
   Widget _buildPreviewSection(ParkingDetectionController controller) {
@@ -281,7 +285,7 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
                 onChanged: (v) { if (v != null) controller.setGrid(controller.gridRows, v); },
               ),
               const Spacer(),
-              ElevatedButton(onPressed: () => controller.autoCalibrateFromCurrentImage(), child: const Text('Auto')),
+              ElevatedButton(onPressed: () => controller.autoCalibrateFromCurrentImage(), child: const Text('Evaluasi Ulang')),
             ],
           ),
           if (_isEditMode && _selectedSlotId != null) ...[
@@ -313,7 +317,7 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
             child: ListTile(
               leading: CircleAvatar(backgroundColor: slot.isOccupied ? Colors.red : Colors.green, child: Text(slot.id, style: const TextStyle(color: Colors.white))),
               title: Text('Brightness: ${slot.currentBrightness.toStringAsFixed(1)}', style: const TextStyle(color: Colors.white70)),
-              subtitle: Text('Threshold: ${slot.threshold.toStringAsFixed(1)}', style: const TextStyle(color: Colors.grey)),
+              subtitle: Text('Thresh: ${slot.threshold.toStringAsFixed(1)}  Dark: ${slot.darkRatio.toStringAsFixed(2)}  Edge: ${slot.edgeDensity.toStringAsFixed(2)}  Sigma: ${slot.sigma.toStringAsFixed(1)}', style: const TextStyle(color: Colors.grey)),
               trailing: Text(slot.isOccupied ? 'TERISI' : 'KOSONG', style: TextStyle(color: slot.isOccupied ? Colors.redAccent : Colors.greenAccent, fontWeight: FontWeight.bold)),
               onTap: () { setState(() { _selectedSlotId = slot.id; }); },
             ),
@@ -448,6 +452,19 @@ class SlotOverlayPainter extends CustomPainter {
       );
       textPainter.layout();
       textPainter.paint(canvas, Offset(rect.left + 5, rect.top + 2));
+
+      final String metrics = 'E:${slot.edgeDensity.toStringAsFixed(2)} D:${slot.darkRatio.toStringAsFixed(2)} S:${slot.sigma.toStringAsFixed(1)}';
+      final double metricsWidth = rect.width.clamp(60.0, 120.0);
+      canvas.drawRect(
+        Rect.fromLTWH(rect.right - metricsWidth, rect.top, metricsWidth, 20),
+        bgPaint,
+      );
+      textPainter.text = TextSpan(
+        text: metrics,
+        style: const TextStyle(color: Colors.white, fontSize: 10),
+      );
+      textPainter.layout(maxWidth: metricsWidth - 6);
+      textPainter.paint(canvas, Offset(rect.right - metricsWidth + 3, rect.top + 3));
     }
   }
 

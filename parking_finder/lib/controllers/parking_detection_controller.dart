@@ -21,6 +21,8 @@ class ParkingDetectionController extends ChangeNotifier {
   int _frameCount = 0;
   StreamSubscription<DatabaseEvent>? _dbSubscription;
   Map<String, int> _lastStatus = {};
+  int? _sensorOrientation;
+  bool _isFrontCamera = false;
   
   // Image Mode State
   File? _selectedImageFile;
@@ -57,6 +59,16 @@ class ParkingDetectionController extends ChangeNotifier {
   double get innerPadding => _innerPadding;
   double get edgeRatioThreshold => _edgeRatioThreshold;
   int get edgeMagThreshold => _edgeMagThreshold;
+  double? get previewAspectRatio {
+    final s = _cameraController?.value.previewSize;
+    if (s != null) {
+      return s.width / s.height;
+    }
+    if (_decodedImage != null) {
+      return _decodedImage!.width / _decodedImage!.height;
+    }
+    return null;
+  }
 
   ParkingDetectionController() {
     _initializeSlots();
@@ -136,6 +148,8 @@ class ParkingDetectionController extends ChangeNotifier {
       if (cameras.isEmpty) return;
 
       final camera = cameras.first;
+      _sensorOrientation = camera.sensorOrientation;
+      _isFrontCamera = camera.lensDirection == CameraLensDirection.front;
 
       _cameraController = CameraController(
         camera,
@@ -225,12 +239,18 @@ class ParkingDetectionController extends ChangeNotifier {
         final stats = _calculateStatsFromCamera(image, rect, otsu);
         final double avgBrightness = stats.$1;
         final double darkRatio = stats.$2;
+        final double sigma = stats.$3;
         final double edgeDensity = _edgeDensityFromCamera(image, rect, _edgeMagThreshold);
-        final bool candidateOccupied = darkRatio > _occupancyRatio && edgeDensity > _edgeRatioThreshold;
+        final bool darknessOccupied = avgBrightness < (otsu - _statusMargin) || darkRatio > _occupancyRatio;
+        final bool textureOccupied = edgeDensity > _edgeRatioThreshold || sigma > _sigmaThreshold;
+        final bool candidateOccupied = darknessOccupied && textureOccupied;
         _slots[i] = slot.copyWith(
           currentBrightness: avgBrightness,
           threshold: otsu.toDouble(),
           isOccupied: candidateOccupied,
+          darkRatio: darkRatio,
+          edgeDensity: edgeDensity,
+          sigma: sigma,
         );
       }
       
@@ -244,27 +264,20 @@ class ParkingDetectionController extends ChangeNotifier {
   }
 
   double _calculateSlotBrightness(CameraImage image, Rect normalizedRect) {
-    // Plane 0 is Y (Luminance)
     final Plane plane = image.planes[0];
     final int width = image.width;
     final int height = image.height;
     final Uint8List bytes = plane.bytes;
-
-    // Convert normalized rect to pixel coordinates
-    final int startX = (normalizedRect.left * width).toInt().clamp(0, width - 1);
-    final int startY = (normalizedRect.top * height).toInt().clamp(0, height - 1);
-    final int endX = (normalizedRect.right * width).toInt().clamp(0, width - 1);
-    final int endY = (normalizedRect.bottom * height).toInt().clamp(0, height - 1);
-
+    final Rect r = _transformRectForCamera(normalizedRect);
+    final int startX = (r.left * width).toInt().clamp(0, width - 1);
+    final int startY = (r.top * height).toInt().clamp(0, height - 1);
+    final int endX = (r.right * width).toInt().clamp(0, width - 1);
+    final int endY = (r.bottom * height).toInt().clamp(0, height - 1);
     int totalBrightness = 0;
     int pixelCount = 0;
-    
-    // Sampling step to reduce calculation time (process every 4th pixel)
-    const int step = 4;
-
+    final int step = math.max(2, (math.min(width, height) / 200).floor());
     for (int y = startY; y < endY; y += step) {
       for (int x = startX; x < endX; x += step) {
-        // YUV420 index calculation for Y plane
         final int index = y * plane.bytesPerRow + x;
         if (index < bytes.length) {
           totalBrightness += bytes[index];
@@ -272,7 +285,6 @@ class ParkingDetectionController extends ChangeNotifier {
         }
       }
     }
-
     if (pixelCount == 0) return 0.0;
     return totalBrightness / pixelCount;
   }
@@ -282,13 +294,14 @@ class ParkingDetectionController extends ChangeNotifier {
     final int width = image.width;
     final int height = image.height;
     final Uint8List bytes = plane.bytes;
-    final int startX = (normalizedRect.left * width).toInt().clamp(0, width - 1);
-    final int startY = (normalizedRect.top * height).toInt().clamp(0, height - 1);
-    final int endX = (normalizedRect.right * width).toInt().clamp(0, width - 1);
-    final int endY = (normalizedRect.bottom * height).toInt().clamp(0, height - 1);
+    final Rect r = _transformRectForCamera(normalizedRect);
+    final int startX = (r.left * width).toInt().clamp(0, width - 1);
+    final int startY = (r.top * height).toInt().clamp(0, height - 1);
+    final int endX = (r.right * width).toInt().clamp(0, width - 1);
+    final int endY = (r.bottom * height).toInt().clamp(0, height - 1);
     final List<int> hist = List<int>.filled(256, 0);
     int total = 0;
-    const int step = 4;
+    final int step = math.max(2, (math.min(width, height) / 200).floor());
     for (int y = startY; y < endY; y += step) {
       for (int x = startX; x < endX; x += step) {
         final int index = y * plane.bytesPerRow + x;
@@ -307,15 +320,16 @@ class ParkingDetectionController extends ChangeNotifier {
     final int width = image.width;
     final int height = image.height;
     final Uint8List bytes = plane.bytes;
-    final int startX = (normalizedRect.left * width).toInt().clamp(0, width - 1);
-    final int startY = (normalizedRect.top * height).toInt().clamp(0, height - 1);
-    final int endX = (normalizedRect.right * width).toInt().clamp(0, width - 1);
-    final int endY = (normalizedRect.bottom * height).toInt().clamp(0, height - 1);
+    final Rect r = _transformRectForCamera(normalizedRect);
+    final int startX = (r.left * width).toInt().clamp(0, width - 1);
+    final int startY = (r.top * height).toInt().clamp(0, height - 1);
+    final int endX = (r.right * width).toInt().clamp(0, width - 1);
+    final int endY = (r.bottom * height).toInt().clamp(0, height - 1);
     int sum = 0;
     int sumSq = 0;
     int dark = 0;
     int count = 0;
-    const int step = 4;
+    final int step = math.max(2, (math.min(width, height) / 200).floor());
     for (int y = startY; y < endY; y += step) {
       for (int x = startX; x < endX; x += step) {
         final int index = y * plane.bytesPerRow + x;
@@ -442,12 +456,18 @@ class ParkingDetectionController extends ChangeNotifier {
       final stats = _calculateStatsFromImage(image, rect, otsu);
       final double avgBrightness = stats.$1;
       final double darkRatio = stats.$2;
+      final double sigma = stats.$3;
       final double edgeDensity = _edgeDensityFromImage(image, rect, _edgeMagThreshold);
-      final bool candidateOccupied = darkRatio > _occupancyRatio && edgeDensity > _edgeRatioThreshold;
+      final bool darknessOccupied = avgBrightness < (otsu - _statusMargin) || darkRatio > _occupancyRatio;
+      final bool textureOccupied = edgeDensity > _edgeRatioThreshold || sigma > _sigmaThreshold;
+      final bool candidateOccupied = darknessOccupied && textureOccupied;
       _slots[i] = slot.copyWith(
         currentBrightness: avgBrightness,
         threshold: otsu.toDouble(),
         isOccupied: candidateOccupied,
+        darkRatio: darkRatio,
+        edgeDensity: edgeDensity,
+        sigma: sigma,
       );
     }
     _updateStats();
@@ -505,12 +525,13 @@ class ParkingDetectionController extends ChangeNotifier {
   }
 
   double _edgeDensityFromImage(img.Image image, Rect normalizedRect, int magThreshold) {
+    final Rect r = _edgeSampleRect(normalizedRect);
     final int width = image.width;
     final int height = image.height;
-    final int startX = (normalizedRect.left * width).toInt().clamp(1, width - 2);
-    final int startY = (normalizedRect.top * height).toInt().clamp(1, height - 2);
-    final int endX = (normalizedRect.right * width).toInt().clamp(1, width - 2);
-    final int endY = (normalizedRect.bottom * height).toInt().clamp(1, height - 2);
+    final int startX = (r.left * width).toInt().clamp(1, width - 2);
+    final int startY = (r.top * height).toInt().clamp(1, height - 2);
+    final int endX = (r.right * width).toInt().clamp(1, width - 2);
+    final int endY = (r.bottom * height).toInt().clamp(1, height - 2);
     int edges = 0;
     int count = 0;
     const int step = 2;
@@ -540,13 +561,15 @@ class ParkingDetectionController extends ChangeNotifier {
     final int width = image.width;
     final int height = image.height;
     final Uint8List bytes = plane.bytes;
-    final int startX = (normalizedRect.left * width).toInt().clamp(1, width - 2);
-    final int startY = (normalizedRect.top * height).toInt().clamp(1, height - 2);
-    final int endX = (normalizedRect.right * width).toInt().clamp(1, width - 2);
-    final int endY = (normalizedRect.bottom * height).toInt().clamp(1, height - 2);
+    final Rect sr = _edgeSampleRect(normalizedRect);
+    final Rect r = _transformRectForCamera(sr);
+    final int startX = (r.left * width).toInt().clamp(1, width - 2);
+    final int startY = (r.top * height).toInt().clamp(1, height - 2);
+    final int endX = (r.right * width).toInt().clamp(1, width - 2);
+    final int endY = (r.bottom * height).toInt().clamp(1, height - 2);
     int edges = 0;
     int count = 0;
-    const int step = 2;
+    final int step = math.max(2, (math.min(width, height) / 300).floor());
     for (int y = startY; y < endY; y += step) {
       for (int x = startX; x < endX; x += step) {
         int p00 = bytes[(y - 1) * plane.bytesPerRow + (x - 1)];
@@ -566,6 +589,52 @@ class ParkingDetectionController extends ChangeNotifier {
     }
     if (count == 0) return 0.0;
     return edges / count;
+  }
+
+  Rect _rotateCW(Rect r) {
+    final double left = 1.0 - r.bottom;
+    final double top = r.left;
+    final double right = 1.0 - r.top;
+    final double bottom = r.right;
+    return Rect.fromLTRB(left.clamp(0.0, 1.0), top.clamp(0.0, 1.0), right.clamp(0.0, 1.0), bottom.clamp(0.0, 1.0));
+  }
+  Rect _rotateCCW(Rect r) {
+    final double left = r.top;
+    final double top = 1.0 - r.right;
+    final double right = r.bottom;
+    final double bottom = 1.0 - r.left;
+    return Rect.fromLTRB(left.clamp(0.0, 1.0), top.clamp(0.0, 1.0), right.clamp(0.0, 1.0), bottom.clamp(0.0, 1.0));
+  }
+  Rect _mirrorH(Rect r) {
+    final double left = 1.0 - r.right;
+    final double right = 1.0 - r.left;
+    return Rect.fromLTRB(left.clamp(0.0, 1.0), r.top, right.clamp(0.0, 1.0), r.bottom);
+  }
+  Rect _transformRectForCamera(Rect nr) {
+    Rect r = nr;
+    if (_sensorOrientation == 90) {
+      r = _rotateCW(r);
+    } else if (_sensorOrientation == 270) {
+      r = _rotateCCW(r);
+    }
+    if (_isFrontCamera) {
+      r = _mirrorH(r);
+    }
+    final double left = r.left.clamp(0.0, 1.0);
+    final double top = r.top.clamp(0.0, 1.0);
+    final double right = r.right.clamp(left + 0.01, 1.0);
+    final double bottom = r.bottom.clamp(top + 0.01, 1.0);
+    return Rect.fromLTRB(left, top, right, bottom);
+  }
+
+  Rect _edgeSampleRect(Rect r) {
+    final double mx = r.width * 0.10;
+    final double my = r.height * 0.05;
+    final double left = (r.left + mx).clamp(0.0, 1.0);
+    final double top = (r.top + my).clamp(0.0, 1.0);
+    final double right = (r.right - mx).clamp(left + 0.01, 1.0);
+    final double bottom = (r.bottom - my).clamp(top + 0.01, 1.0);
+    return Rect.fromLTRB(left, top, right, bottom);
   }
 
   Rect _innerRect(Rect r, double pad) {

@@ -7,6 +7,9 @@ class ParkingSlot {
   double threshold;
   double currentBrightness;
   bool isOccupied;
+  double darkRatio;
+  double edgeDensity;
+  double sigma;
 
   ParkingSlot({
     required this.id,
@@ -14,6 +17,9 @@ class ParkingSlot {
     this.threshold = 100.0, // Default threshold, can be tuned
     this.currentBrightness = 0.0,
     this.isOccupied = false,
+    this.darkRatio = 0.0,
+    this.edgeDensity = 0.0,
+    this.sigma = 0.0,
   });
 
   // Create a copy with updated status
@@ -22,6 +28,9 @@ class ParkingSlot {
     bool? isOccupied,
     double? threshold,
     Rect? rect,
+    double? darkRatio,
+    double? edgeDensity,
+    double? sigma,
   }) {
     return ParkingSlot(
       id: id,
@@ -29,6 +38,9 @@ class ParkingSlot {
       threshold: threshold ?? this.threshold,
       currentBrightness: currentBrightness ?? this.currentBrightness,
       isOccupied: isOccupied ?? this.isOccupied,
+      darkRatio: darkRatio ?? this.darkRatio,
+      edgeDensity: edgeDensity ?? this.edgeDensity,
+      sigma: sigma ?? this.sigma,
     );
   }
 }
