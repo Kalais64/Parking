@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:camera/camera.dart';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
@@ -24,12 +25,15 @@ class ParkingDetectionController extends ChangeNotifier {
   File? _selectedImageFile;
   img.Image? _decodedImage;
   bool _isImageMode = false;
+  Uint8List? _selectedImageBytes;
   
   // Stats
   int _totalSlots = 0;
   int _emptySlots = 0;
   int _filledSlots = 0;
-  double _statusMargin = 8.0;
+  double _statusMargin = 15.0;
+  int _gridRows = 2;
+  int _gridCols = 4;
 
   List<ParkingSlot> get slots => _slots;
   CameraController? get cameraController => _cameraController;
@@ -39,6 +43,9 @@ class ParkingDetectionController extends ChangeNotifier {
   int get filledSlots => _filledSlots;
   File? get selectedImageFile => _selectedImageFile;
   bool get isImageMode => _isImageMode;
+  Uint8List? get selectedImageBytes => _selectedImageBytes;
+  int get gridRows => _gridRows;
+  int get gridCols => _gridCols;
 
   ParkingDetectionController() {
     _initializeSlots();
@@ -49,17 +56,42 @@ class ParkingDetectionController extends ChangeNotifier {
   }
 
   void _initializeSlots() {
-    // Define dummy slots (normalized coordinates 0.0-1.0)
-    // Assuming a grid layout for demo
-    _slots = [
-      ParkingSlot(id: 'S1', rect: const Rect.fromLTWH(0.1, 0.2, 0.2, 0.2), threshold: 80),
-      ParkingSlot(id: 'S2', rect: const Rect.fromLTWH(0.4, 0.2, 0.2, 0.2), threshold: 80),
-      ParkingSlot(id: 'S3', rect: const Rect.fromLTWH(0.7, 0.2, 0.2, 0.2), threshold: 80),
-      ParkingSlot(id: 'S4', rect: const Rect.fromLTWH(0.1, 0.6, 0.2, 0.2), threshold: 80),
-      ParkingSlot(id: 'S5', rect: const Rect.fromLTWH(0.4, 0.6, 0.2, 0.2), threshold: 80),
-      ParkingSlot(id: 'S6', rect: const Rect.fromLTWH(0.7, 0.6, 0.2, 0.2), threshold: 80),
-    ];
+    _generateSlotsFromGrid();
     _updateStats();
+  }
+
+  void setGrid(int rows, int cols) {
+    _gridRows = rows.clamp(2, 10);
+    _gridCols = cols.clamp(2, 10);
+    _generateSlotsFromGrid();
+    _updateStats();
+    notifyListeners();
+  }
+
+  void _generateSlotsFromGrid() {
+    final List<ParkingSlot> newSlots = [];
+    final double cellW = 1.0 / _gridCols;
+    final double cellH = 1.0 / _gridRows;
+    const double padX = 0.02;
+    const double padY = 0.02;
+    int idCounter = 1;
+    for (int r = 0; r < _gridRows; r++) {
+      for (int c = 0; c < _gridCols; c++) {
+        final double left = c * cellW + padX;
+        final double top = r * cellH + padY;
+        final double width = cellW - 2 * padX;
+        final double height = cellH - 2 * padY;
+        newSlots.add(
+          ParkingSlot(
+            id: 'S$idCounter',
+            rect: Rect.fromLTWH(left, top, width, height),
+            threshold: 150,
+          ),
+        );
+        idCounter++;
+      }
+    }
+    _slots = newSlots;
   }
 
   Future<void> initializeCamera() async {
@@ -240,6 +272,7 @@ class ParkingDetectionController extends ChangeNotifier {
   Future<void> pickAndProcessImage(String path) async {
     _isImageMode = true;
     _selectedImageFile = File(path);
+    _selectedImageBytes = null;
     
     // Stop camera if running
     if (_cameraController != null && _cameraController!.value.isStreamingImages) {
@@ -254,10 +287,35 @@ class ParkingDetectionController extends ChangeNotifier {
       _decodedImage = img.decodeImage(bytes);
       
       if (_decodedImage != null) {
-        _processStaticImage(_decodedImage!);
+        _processStaticImageAdaptive(_decodedImage!);
       }
     } catch (e) {
       debugPrint('Error processing image file: $e');
+    } finally {
+      _isProcessing = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> pickAndProcessBytes(Uint8List bytes) async {
+    _isImageMode = true;
+    _selectedImageBytes = bytes;
+    _selectedImageFile = null;
+
+    if (_cameraController != null && _cameraController!.value.isStreamingImages) {
+      await _cameraController!.stopImageStream();
+    }
+
+    _isProcessing = true;
+    notifyListeners();
+
+    try {
+      _decodedImage = img.decodeImage(bytes);
+      if (_decodedImage != null) {
+        _processStaticImageAdaptive(_decodedImage!);
+      }
+    } catch (e) {
+      debugPrint('Error processing image bytes: $e');
     } finally {
       _isProcessing = false;
       notifyListeners();
@@ -268,6 +326,7 @@ class ParkingDetectionController extends ChangeNotifier {
     _isImageMode = false;
     _selectedImageFile = null;
     _decodedImage = null;
+    _selectedImageBytes = null;
     if (_cameraController != null && !_cameraController!.value.isStreamingImages) {
         // Restart camera stream if it was stopped
         // Ideally we might need to re-initialize or just start stream
@@ -277,24 +336,97 @@ class ParkingDetectionController extends ChangeNotifier {
     initializeCamera();
   }
 
-  void _processStaticImage(img.Image image) {
-      for (int i = 0; i < _slots.length; i++) {
-        final slot = _slots[i];
-        final double avgBrightness = _calculateSlotBrightnessFromImage(image, slot.rect);
-        
-        final bool candidateOccupied =
-            avgBrightness < (slot.threshold - _statusMargin)
-                ? true
-                : avgBrightness > (slot.threshold + _statusMargin)
-                    ? false
-                    : slot.isOccupied;
-        
-        _slots[i] = slot.copyWith(
-            currentBrightness: avgBrightness,
-            isOccupied: candidateOccupied,
-        );
+  void _processStaticImageAdaptive(img.Image image, {double occupancyRatio = 0.35}) {
+    for (int i = 0; i < _slots.length; i++) {
+      final slot = _slots[i];
+      final histResult = _calculateHistogramFromImage(image, slot.rect);
+      final List<int> hist = histResult.$1;
+      final int total = histResult.$2;
+      final int otsu = _otsuThreshold(hist, total);
+      int darkCount = 0;
+      int sumBrightness = 0;
+      int count = 0;
+      final int width = image.width;
+      final int height = image.height;
+      final int startX = (slot.rect.left * width).toInt().clamp(0, width - 1);
+      final int startY = (slot.rect.top * height).toInt().clamp(0, height - 1);
+      final int endX = (slot.rect.right * width).toInt().clamp(0, width - 1);
+      final int endY = (slot.rect.bottom * height).toInt().clamp(0, height - 1);
+      const int step = 4;
+      for (int y = startY; y < endY; y += step) {
+        for (int x = startX; x < endX; x += step) {
+          final p = image.getPixel(x, y);
+          final int v = ((p.r + p.g + p.b) ~/ 3);
+          if (v <= otsu) darkCount++;
+          sumBrightness += v;
+          count++;
+        }
       }
-      _updateStats();
+      final double avgBrightness = count == 0 ? 0.0 : sumBrightness / count;
+      final double darkRatio = count == 0 ? 0.0 : darkCount / count;
+      final bool candidateOccupied = darkRatio > occupancyRatio;
+      _slots[i] = slot.copyWith(
+        currentBrightness: avgBrightness,
+        threshold: otsu.toDouble(),
+        isOccupied: candidateOccupied,
+      );
+    }
+    _updateStats();
+  }
+
+  (List<int>, int) _calculateHistogramFromImage(img.Image image, Rect normalizedRect) {
+    final int width = image.width;
+    final int height = image.height;
+    final int startX = (normalizedRect.left * width).toInt().clamp(0, width - 1);
+    final int startY = (normalizedRect.top * height).toInt().clamp(0, height - 1);
+    final int endX = (normalizedRect.right * width).toInt().clamp(0, width - 1);
+    final int endY = (normalizedRect.bottom * height).toInt().clamp(0, height - 1);
+    final List<int> hist = List<int>.filled(256, 0);
+    int total = 0;
+    const int step = 4;
+    for (int y = startY; y < endY; y += step) {
+      for (int x = startX; x < endX; x += step) {
+        final p = image.getPixel(x, y);
+        final int v = ((p.r + p.g + p.b) ~/ 3);
+        hist[v]++;
+        total++;
+      }
+    }
+    return (hist, total);
+  }
+
+  int _otsuThreshold(List<int> hist, int total) {
+    if (total == 0) return 128;
+    double sum = 0;
+    for (int t = 0; t < 256; t++) {
+      sum += t * hist[t];
+    }
+    double sumB = 0;
+    int wB = 0;
+    double varMax = 0;
+    int threshold = 0;
+    for (int t = 0; t < 256; t++) {
+      wB += hist[t];
+      if (wB == 0) continue;
+      int wF = total - wB;
+      if (wF == 0) break;
+      sumB += t * hist[t];
+      double mB = sumB / wB;
+      double mF = (sum - sumB) / wF;
+      double varBetween = wB * wF * (mB - mF) * (mB - mF);
+      if (varBetween > varMax) {
+        varMax = varBetween;
+        threshold = t;
+      }
+    }
+    return threshold;
+  }
+
+  void autoCalibrateFromCurrentImage({double occupancyRatio = 0.35}) {
+    if (_decodedImage != null) {
+      _processStaticImageAdaptive(_decodedImage!, occupancyRatio: occupancyRatio);
+      notifyListeners();
+    }
   }
 
   Future<int> countEmptySlotsFromFile(String path) async {

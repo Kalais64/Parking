@@ -35,8 +35,12 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
   }
 
   Widget _previewContent(ParkingDetectionController controller) {
-    final Widget inner = controller.isImageMode && controller.selectedImageFile != null
-        ? Image.file(controller.selectedImageFile!, fit: BoxFit.fill)
+    final bool hasImageBytes = controller.selectedImageBytes != null;
+    final bool hasImageFile = controller.selectedImageFile != null;
+    final Widget inner = controller.isImageMode && (hasImageBytes || hasImageFile)
+        ? (hasImageBytes
+            ? Image.memory(controller.selectedImageBytes!, fit: BoxFit.fill)
+            : Image.file(controller.selectedImageFile!, fit: BoxFit.fill))
         : controller.isCameraInitialized
             ? CameraPreview(controller.cameraController!)
             : const Center(child: CircularProgressIndicator());
@@ -87,7 +91,8 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
     
     if (pickedFile != null) {
       if (!mounted) return;
-      context.read<ParkingDetectionController>().pickAndProcessImage(pickedFile.path);
+      final bytes = await pickedFile.readAsBytes();
+      context.read<ParkingDetectionController>().pickAndProcessBytes(bytes);
     }
   }
 
@@ -183,6 +188,53 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
                     controller.updateAllThresholds(value);
                   },
                 ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const Text('Grid:', style: TextStyle(color: Colors.white, fontSize: 16)),
+              const SizedBox(width: 8),
+              Text('${controller.gridRows} × ${controller.gridCols}', style: const TextStyle(color: Colors.white, fontSize: 16)),
+              const SizedBox(width: 8),
+              DropdownButton<int>(
+                value: controller.gridRows,
+                dropdownColor: Colors.black87,
+                iconEnabledColor: Colors.white,
+                iconDisabledColor: Colors.white70,
+                style: const TextStyle(color: Colors.white),
+                items: List<int>.generate(9, (i) => i + 2)
+                    .map((v) => DropdownMenuItem<int>(value: v, child: Text('$v', style: const TextStyle(color: Colors.white))))
+                    .toList(),
+                onChanged: (v) {
+                  if (v != null) {
+                    controller.setGrid(v, controller.gridCols);
+                  }
+                },
+              ),
+              const SizedBox(width: 4),
+              const Text('×', style: TextStyle(color: Colors.white)),
+              const SizedBox(width: 4),
+              DropdownButton<int>(
+                value: controller.gridCols,
+                dropdownColor: Colors.black87,
+                iconEnabledColor: Colors.white,
+                iconDisabledColor: Colors.white70,
+                style: const TextStyle(color: Colors.white),
+                items: List<int>.generate(9, (i) => i + 2)
+                    .map((v) => DropdownMenuItem<int>(value: v, child: Text('$v', style: const TextStyle(color: Colors.white))))
+                    .toList(),
+                onChanged: (v) {
+                  if (v != null) {
+                    controller.setGrid(controller.gridRows, v);
+                  }
+                },
+              ),
+              const Spacer(),
+              ElevatedButton(
+                onPressed: () => controller.autoCalibrateFromCurrentImage(),
+                child: const Text('Auto'),
               ),
             ],
           ),
