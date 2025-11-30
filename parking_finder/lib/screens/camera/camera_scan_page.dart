@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import '../../services/camera_scan_service.dart';
 import '../../constants/app_colors_new.dart';
 import 'payment_confirmation_dialog.dart';
@@ -405,6 +407,11 @@ class _CameraScanPageState extends State<CameraScanPage> with SingleTickerProvid
               );
             },
           ),
+          IconButton(
+            icon: const Icon(Icons.qr_code),
+            onPressed: _showMyBarcode,
+            tooltip: 'Tampilkan QR Saya',
+          ),
         ],
       ),
       body: Stack(
@@ -621,6 +628,35 @@ class _CameraScanPageState extends State<CameraScanPage> with SingleTickerProvid
                 ),
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showMyBarcode() {
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? 'guest';
+    final data = 'parkiryuk|uid=$uid|ts=${DateTime.now().millisecondsSinceEpoch}';
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('QR Saya'),
+        content: SizedBox(
+          width: 240,
+          height: 240,
+          child: QrImageView(
+            data: data,
+            version: QrVersions.auto,
+            size: 220,
+            eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square, color: Colors.black),
+            dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square, color: Colors.black),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Tutup'),
           ),
         ],
       ),

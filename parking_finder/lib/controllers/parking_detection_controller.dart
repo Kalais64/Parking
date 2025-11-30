@@ -4,6 +4,9 @@ import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
+import 'package:firebase_database/firebase_database.dart';
+import '../models/notification.dart';
+import '../services/notification_service.dart';
 import '../models/parking_slot.dart';
 import 'map_controller.dart';
 
@@ -14,6 +17,8 @@ class ParkingDetectionController extends ChangeNotifier {
   bool _isProcessing = false;
   int _processInterval = 10; // Process every 10th frame
   int _frameCount = 0;
+  StreamSubscription<DatabaseEvent>? _dbSubscription;
+  Map<String, int> _lastStatus = {};
   
   // Image Mode State
   File? _selectedImageFile;
@@ -24,6 +29,7 @@ class ParkingDetectionController extends ChangeNotifier {
   int _totalSlots = 0;
   int _emptySlots = 0;
   int _filledSlots = 0;
+  double _statusMargin = 8.0;
 
   List<ParkingSlot> get slots => _slots;
   CameraController? get cameraController => _cameraController;
@@ -57,25 +63,79 @@ class ParkingDetectionController extends ChangeNotifier {
   }
 
   Future<void> initializeCamera() async {
-    final cameras = await availableCameras();
-    if (cameras.isEmpty) return;
+    try {
+      final cameras = await availableCameras();
+      if (cameras.isEmpty) return;
 
-    // Use the first camera (usually back camera)
-    final camera = cameras.first;
-    
-    _cameraController = CameraController(
-      camera,
-      ResolutionPreset.medium,
-      enableAudio: false,
-      imageFormatGroup: ImageFormatGroup.yuv420,
-    );
+      final camera = cameras.first;
 
-    await _cameraController!.initialize();
-    
-    // Start image stream for processing
-    _cameraController!.startImageStream(_processCameraImage);
-    
-    notifyListeners();
+      _cameraController = CameraController(
+        camera,
+        ResolutionPreset.medium,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.yuv420,
+      );
+
+      await _cameraController?.initialize();
+
+      _cameraController?.startImageStream(_processCameraImage);
+
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error initializing camera: $e');
+    }
+  }
+
+  void startRealtimeSubscription() {
+    try {
+      _dbSubscription?.cancel();
+      final ref = FirebaseDatabase.instance.ref('/parking_status');
+      _dbSubscription = ref.onValue.listen((event) {
+        final data = event.snapshot.value;
+        if (data is Map) {
+          final Map<String, int> newStatus = {};
+          data.forEach((key, value) {
+            try {
+              final intVal = value is int ? value : int.tryParse('$value') ?? 0;
+              newStatus[key.toString()] = intVal;
+            } catch (_) {}
+          });
+
+          for (final entry in newStatus.entries) {
+            final slotId = entry.key;
+            final occupied = entry.value == 1;
+            final index = _slots.indexWhere((s) => s.id == slotId);
+            if (index != -1) {
+              final prevOccupied = _slots[index].isOccupied;
+              if (prevOccupied && !occupied) {
+                NotificationService().showToast(
+                  title: 'Slot tersedia',
+                  message: 'Slot $slotId baru saja kosong',
+                  type: NotificationType.parkingAvailable,
+                  priority: NotificationPriority.high,
+                );
+              }
+              _slots[index] = _slots[index].copyWith(
+                isOccupied: occupied,
+              );
+            }
+          }
+
+          _lastStatus = newStatus;
+          _updateStats();
+          notifyListeners();
+        }
+      }, onError: (error) {
+        debugPrint('Realtime DB error: $error');
+      });
+    } catch (e) {
+      debugPrint('Error starting realtime subscription: $e');
+    }
+  }
+
+  void stopRealtimeSubscription() {
+    _dbSubscription?.cancel();
+    _dbSubscription = null;
   }
 
   void _processCameraImage(CameraImage image) {
@@ -92,13 +152,18 @@ class ParkingDetectionController extends ChangeNotifier {
         final slot = _slots[i];
         final double avgBrightness = _calculateSlotBrightness(image, slot.rect);
         
-        final bool isOccupied = avgBrightness < slot.threshold;
+        final bool candidateOccupied =
+            avgBrightness < (slot.threshold - _statusMargin)
+                ? true
+                : avgBrightness > (slot.threshold + _statusMargin)
+                    ? false
+                    : slot.isOccupied;
         
         // Update slot if status changed or brightness changed significantly
-        if (slot.isOccupied != isOccupied || (slot.currentBrightness - avgBrightness).abs() > 5) {
+        if (slot.isOccupied != candidateOccupied || (slot.currentBrightness - avgBrightness).abs() > 5) {
           _slots[i] = slot.copyWith(
             currentBrightness: avgBrightness,
-            isOccupied: isOccupied,
+            isOccupied: candidateOccupied,
           );
         }
       }
@@ -151,9 +216,8 @@ class ParkingDetectionController extends ChangeNotifier {
     _filledSlots = _slots.where((s) => s.isOccupied).length;
     _emptySlots = _totalSlots - _filledSlots;
 
-    // Update MapController if available
-    // Assuming '1' is the ID of the parking location we are simulating
-    _mapController?.updateParkingRealtime('1', _emptySlots, _totalSlots);
+    final id = _mapController?.selectedParking?.id ?? '1';
+    _mapController?.updateParkingRealtime(id, _emptySlots, _totalSlots);
   }
 
   void updateThreshold(String slotId, double newThreshold) {
@@ -218,14 +282,67 @@ class ParkingDetectionController extends ChangeNotifier {
         final slot = _slots[i];
         final double avgBrightness = _calculateSlotBrightnessFromImage(image, slot.rect);
         
-        final bool isOccupied = avgBrightness < slot.threshold;
+        final bool candidateOccupied =
+            avgBrightness < (slot.threshold - _statusMargin)
+                ? true
+                : avgBrightness > (slot.threshold + _statusMargin)
+                    ? false
+                    : slot.isOccupied;
         
         _slots[i] = slot.copyWith(
             currentBrightness: avgBrightness,
-            isOccupied: isOccupied,
+            isOccupied: candidateOccupied,
         );
       }
       _updateStats();
+  }
+
+  Future<int> countEmptySlotsFromFile(String path) async {
+    final bytes = await File(path).readAsBytes();
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) return 0;
+    return countEmptySlotsFromImage(decoded);
+  }
+
+  int countEmptySlotsFromImage(img.Image image) {
+    int empty = 0;
+    for (final slot in _slots) {
+      final avgBrightness = _calculateSlotBrightnessFromImage(image, slot.rect);
+      final candidateOccupied =
+          avgBrightness < (slot.threshold - _statusMargin)
+              ? true
+              : avgBrightness > (slot.threshold + _statusMargin)
+                  ? false
+                  : slot.isOccupied;
+      if (!candidateOccupied) empty++;
+    }
+    return empty;
+  }
+
+  void updateSlotRect(String slotId, Rect newRect) {
+    final index = _slots.indexWhere((s) => s.id == slotId);
+    if (index == -1) return;
+    final clamped = Rect.fromLTWH(
+      newRect.left.clamp(0.0, 1.0),
+      newRect.top.clamp(0.0, 1.0),
+      newRect.width.clamp(0.01, 1.0),
+      newRect.height.clamp(0.01, 1.0),
+    );
+    _slots[index] = _slots[index].copyWith(rect: clamped);
+    notifyListeners();
+  }
+
+  void updateSlotRectByDelta(String slotId, {double dx = 0, double dy = 0, double dWidth = 0, double dHeight = 0}) {
+    final index = _slots.indexWhere((s) => s.id == slotId);
+    if (index == -1) return;
+    final r = _slots[index].rect;
+    final left = (r.left + dx).clamp(0.0, 1.0);
+    final top = (r.top + dy).clamp(0.0, 1.0);
+    final width = (r.width + dWidth).clamp(0.01, 1.0 - left);
+    final height = (r.height + dHeight).clamp(0.01, 1.0 - top);
+    final nr = Rect.fromLTWH(left, top, width, height);
+    _slots[index] = _slots[index].copyWith(rect: nr);
+    notifyListeners();
   }
 
   double _calculateSlotBrightnessFromImage(img.Image image, Rect normalizedRect) {
@@ -259,6 +376,7 @@ class ParkingDetectionController extends ChangeNotifier {
   @override
   void dispose() {
     _cameraController?.dispose();
+    _dbSubscription?.cancel();
     super.dispose();
   }
 }

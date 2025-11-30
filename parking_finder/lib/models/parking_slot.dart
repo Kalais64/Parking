@@ -21,10 +21,11 @@ class ParkingSlot {
     double? currentBrightness,
     bool? isOccupied,
     double? threshold,
+    Rect? rect,
   }) {
     return ParkingSlot(
       id: id,
-      rect: rect,
+      rect: rect ?? this.rect,
       threshold: threshold ?? this.threshold,
       currentBrightness: currentBrightness ?? this.currentBrightness,
       isOccupied: isOccupied ?? this.isOccupied,

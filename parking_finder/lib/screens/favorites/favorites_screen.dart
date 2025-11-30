@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../../controllers/map_controller.dart';
 import '../../constants/app_colors_new.dart';
 import '../../models/parking_location.dart';
 import '../../models/favorite.dart';
@@ -501,6 +503,9 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
 
   void _navigateToParking(ParkingLocation parking) {
     Navigator.pop(context);
+    final mapController = Provider.of<MapController>(context, listen: false);
+    mapController.navigateToParkingWithDirections(parking);
+    Navigator.pushNamed(context, '/');
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Navigasi ke ${parking.name}'),

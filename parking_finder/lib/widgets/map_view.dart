@@ -291,6 +291,22 @@ class _MapViewState extends State<MapView> {
                                 ),
                               ),
                             ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () {
+                                  controller.clearNavigation();
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('Navigasi dibersihkan')),
+                                  );
+                                },
+                                icon: const Icon(Icons.clear, size: 16),
+                                label: const Text('Bersihkan'),
+                                style: OutlinedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                ),
+                              ),
+                            ),
                           ],
                         ),
                       ],
