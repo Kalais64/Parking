@@ -341,8 +341,10 @@ class ParkingDetectionController extends ChangeNotifier {
     _filledSlots = _slots.where((s) => s.isOccupied).length;
     _emptySlots = _totalSlots - _filledSlots;
 
-    final id = _mapController?.selectedParking?.id ?? '1';
-    _mapController?.updateParkingRealtime(id, _emptySlots, _totalSlots);
+    final id = _mapController?.selectedParking?.id;
+    if (id != null) {
+      _mapController?.updateParkingRealtime(id, _emptySlots, _totalSlots);
+    }
   }
 
   void updateThreshold(String slotId, double newThreshold) {

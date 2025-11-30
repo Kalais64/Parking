@@ -210,6 +210,18 @@ class MapController extends ChangeNotifier {
     }
   }
 
+  void addOrUpdateParkingLocation(ParkingLocation loc) {
+    final index = _parkingLocations.indexWhere((p) => p.id == loc.id);
+    if (index == -1) {
+      _parkingLocations.add(loc);
+    } else {
+      _parkingLocations[index] = loc;
+    }
+    _selectedParking = loc;
+    _updateMarkers();
+    notifyListeners();
+  }
+
   // Create parking marker
   Marker _createParkingMarker(ParkingLocation parking) {
     final hue = _getMarkerHue(parking.status);

@@ -1,8 +1,12 @@
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import '../../controllers/parking_detection_controller.dart';
+import '../../controllers/map_controller.dart';
+import '../../models/parking_location.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../../models/parking_slot.dart';
 
 class ParkingSimulationScreen extends StatefulWidget {
@@ -16,16 +20,21 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
   bool _isEditMode = false;
   String? _selectedSlotId;
   final GlobalKey _previewKey = GlobalKey();
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _addressController = TextEditingController();
   @override
   void initState() {
     super.initState();
     // Initialize camera when screen opens
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final controller = context.read<ParkingDetectionController>();
-      if (!controller.isImageMode) {
-        controller.initializeCamera();
+      final det = context.read<ParkingDetectionController>();
+      det.setMapController(context.read<MapController>());
+      if (!det.isImageMode) {
+        det.initializeCamera();
       }
-      controller.startRealtimeSubscription();
+      if (!kIsWeb) {
+        det.startRealtimeSubscription();
+      }
     });
   }
 
@@ -41,7 +50,7 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
         ? (hasImageBytes
             ? Image.memory(controller.selectedImageBytes!, fit: BoxFit.fill)
             : Image.file(controller.selectedImageFile!, fit: BoxFit.fill))
-        : controller.isCameraInitialized
+        : (controller.isCameraInitialized && controller.cameraController != null)
             ? CameraPreview(controller.cameraController!)
             : const Center(child: CircularProgressIndicator());
     return Container(key: _previewKey, child: inner);
@@ -99,6 +108,8 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
   @override
   void dispose() {
     context.read<ParkingDetectionController>().stopRealtimeSubscription();
+    _nameController.dispose();
+    _addressController.dispose();
     super.dispose();
   }
 
@@ -112,6 +123,11 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
             backgroundColor: Colors.black87,
             foregroundColor: Colors.white,
             actions: [
+              IconButton(
+                icon: const Icon(Icons.add_location_alt),
+                onPressed: () => _showAddLocationDialog(context, controller),
+                tooltip: 'Tambah Lokasi Parkir',
+              ),
               IconButton(
                 icon: Icon(controller.isImageMode ? Icons.camera_alt : Icons.image),
                 onPressed: () {
@@ -159,8 +175,7 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
     return Container(
       color: Colors.grey[900],
       padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: ListView(
         children: [
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -173,10 +188,7 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
           const SizedBox(height: 16),
           Row(
             children: [
-              const Text(
-                'Threshold:',
-                style: TextStyle(color: Colors.white, fontSize: 16),
-              ),
+              const Text('Threshold:', style: TextStyle(color: Colors.white, fontSize: 16)),
               Expanded(
                 child: Slider(
                   value: controller.slots.isNotEmpty ? controller.slots.first.threshold : 100,
@@ -184,9 +196,7 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
                   max: 255,
                   divisions: 255,
                   label: (controller.slots.isNotEmpty ? controller.slots.first.threshold : 100).round().toString(),
-                  onChanged: (value) {
-                    controller.updateAllThresholds(value);
-                  },
+                  onChanged: (value) => controller.updateAllThresholds(value),
                 ),
               ),
             ],
@@ -254,11 +264,7 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
                 items: List<int>.generate(9, (i) => i + 2)
                     .map((v) => DropdownMenuItem<int>(value: v, child: Text('$v', style: const TextStyle(color: Colors.white))))
                     .toList(),
-                onChanged: (v) {
-                  if (v != null) {
-                    controller.setGrid(v, controller.gridCols);
-                  }
-                },
+                onChanged: (v) { if (v != null) controller.setGrid(v, controller.gridCols); },
               ),
               const SizedBox(width: 4),
               const Text('×', style: TextStyle(color: Colors.white)),
@@ -272,117 +278,118 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
                 items: List<int>.generate(9, (i) => i + 2)
                     .map((v) => DropdownMenuItem<int>(value: v, child: Text('$v', style: const TextStyle(color: Colors.white))))
                     .toList(),
-                onChanged: (v) {
-                  if (v != null) {
-                    controller.setGrid(controller.gridRows, v);
-                  }
-                },
+                onChanged: (v) { if (v != null) controller.setGrid(controller.gridRows, v); },
               ),
               const Spacer(),
-              ElevatedButton(
-                onPressed: () => controller.autoCalibrateFromCurrentImage(),
-                child: const Text('Auto'),
+              ElevatedButton(onPressed: () => controller.autoCalibrateFromCurrentImage(), child: const Text('Auto')),
+            ],
+          ),
+          if (_isEditMode && _selectedSlotId != null) ...[
+            const SizedBox(height: 8),
+            Text('Edit Slot: ${_selectedSlotId!}', style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                IconButton(onPressed: () => _nudgeSelected(controller, dx: -0.01), icon: const Icon(Icons.arrow_left, color: Colors.white)),
+                IconButton(onPressed: () => _nudgeSelected(controller, dx: 0.01), icon: const Icon(Icons.arrow_right, color: Colors.white)),
+                IconButton(onPressed: () => _nudgeSelected(controller, dy: -0.01), icon: const Icon(Icons.arrow_upward, color: Colors.white)),
+                IconButton(onPressed: () => _nudgeSelected(controller, dy: 0.01), icon: const Icon(Icons.arrow_downward, color: Colors.white)),
+              ],
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                IconButton(onPressed: () => _nudgeSelected(controller, dWidth: -0.01), icon: const Icon(Icons.remove_circle_outline, color: Colors.white)),
+                IconButton(onPressed: () => _nudgeSelected(controller, dWidth: 0.01), icon: const Icon(Icons.add_circle_outline, color: Colors.white)),
+                IconButton(onPressed: () => _nudgeSelected(controller, dHeight: -0.01), icon: const Icon(Icons.vertical_align_center, color: Colors.white)),
+                IconButton(onPressed: () => _nudgeSelected(controller, dHeight: 0.01), icon: const Icon(Icons.vertical_align_top, color: Colors.white)),
+              ],
+            ),
+          ],
+          const Text('Status Slot:', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          ...controller.slots.map((slot) => Card(
+            color: Colors.grey[800],
+            child: ListTile(
+              leading: CircleAvatar(backgroundColor: slot.isOccupied ? Colors.red : Colors.green, child: Text(slot.id, style: const TextStyle(color: Colors.white))),
+              title: Text('Brightness: ${slot.currentBrightness.toStringAsFixed(1)}', style: const TextStyle(color: Colors.white70)),
+              subtitle: Text('Threshold: ${slot.threshold.toStringAsFixed(1)}', style: const TextStyle(color: Colors.grey)),
+              trailing: Text(slot.isOccupied ? 'TERISI' : 'KOSONG', style: TextStyle(color: slot.isOccupied ? Colors.redAccent : Colors.greenAccent, fontWeight: FontWeight.bold)),
+              onTap: () { setState(() { _selectedSlotId = slot.id; }); },
+            ),
+          )),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showAddLocationDialog(BuildContext context, ParkingDetectionController det) async {
+    final map = context.read<MapController>();
+    _nameController.text = '';
+    _addressController.text = '';
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Tambah Lokasi Parkir'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _nameController,
+                decoration: const InputDecoration(labelText: 'Nama Lokasi'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _addressController,
+                decoration: const InputDecoration(labelText: 'Alamat (opsional)'),
               ),
             ],
           ),
-          (_isEditMode && _selectedSlotId != null)
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const SizedBox(height: 8),
-                    Text(
-                      'Edit Slot: ${_selectedSlotId!}',
-                      style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        IconButton(
-                          onPressed: () => _nudgeSelected(controller, dx: -0.01),
-                          icon: const Icon(Icons.arrow_left, color: Colors.white),
-                        ),
-                        IconButton(
-                          onPressed: () => _nudgeSelected(controller, dx: 0.01),
-                          icon: const Icon(Icons.arrow_right, color: Colors.white),
-                        ),
-                        IconButton(
-                          onPressed: () => _nudgeSelected(controller, dy: -0.01),
-                          icon: const Icon(Icons.arrow_upward, color: Colors.white),
-                        ),
-                        IconButton(
-                          onPressed: () => _nudgeSelected(controller, dy: 0.01),
-                          icon: const Icon(Icons.arrow_downward, color: Colors.white),
-                        ),
-                      ],
-                    ),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        IconButton(
-                          onPressed: () => _nudgeSelected(controller, dWidth: -0.01),
-                          icon: const Icon(Icons.remove_circle_outline, color: Colors.white),
-                        ),
-                        IconButton(
-                          onPressed: () => _nudgeSelected(controller, dWidth: 0.01),
-                          icon: const Icon(Icons.add_circle_outline, color: Colors.white),
-                        ),
-                        IconButton(
-                          onPressed: () => _nudgeSelected(controller, dHeight: -0.01),
-                          icon: const Icon(Icons.vertical_align_center, color: Colors.white),
-                        ),
-                        IconButton(
-                          onPressed: () => _nudgeSelected(controller, dHeight: 0.01),
-                          icon: const Icon(Icons.vertical_align_top, color: Colors.white),
-                        ),
-                      ],
-                    ),
-                  ],
-                )
-              : const SizedBox.shrink(),
-          const Text(
-            'Status Slot:',
-            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-          Expanded(
-            child: ListView.builder(
-              itemCount: controller.slots.length,
-              itemBuilder: (context, index) {
-                final slot = controller.slots[index];
-                return Card(
-                  color: Colors.grey[800],
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: slot.isOccupied ? Colors.red : Colors.green,
-                      child: Text(slot.id, style: const TextStyle(color: Colors.white)),
-                    ),
-                    title: Text(
-                      'Brightness: ${slot.currentBrightness.toStringAsFixed(1)}',
-                      style: const TextStyle(color: Colors.white70),
-                    ),
-                    subtitle: Text(
-                      'Threshold: ${slot.threshold.toStringAsFixed(1)}',
-                      style: const TextStyle(color: Colors.grey),
-                    ),
-                    trailing: Text(
-                      slot.isOccupied ? 'TERISI' : 'KOSONG',
-                      style: TextStyle(
-                        color: slot.isOccupied ? Colors.redAccent : Colors.greenAccent,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    onTap: () {
-                      setState(() {
-                        _selectedSlotId = slot.id;
-                      });
-                    },
-                  ),
-                );
-              },
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Batal'),
             ),
-          ),
-        ],
-      ),
+            ElevatedButton(
+              onPressed: () {
+                final name = _nameController.text.trim();
+                final address = _addressController.text.trim();
+                final pos = map.currentPosition ?? const LatLng(-6.2088, 106.8456);
+                final id = 'custom_${DateTime.now().millisecondsSinceEpoch}';
+                final total = det.totalSlots;
+                final empty = det.emptySlots;
+                final status = empty == 0
+                    ? ParkingStatus.full
+                    : (empty < (total * 0.2))
+                        ? ParkingStatus.gettingFull
+                        : ParkingStatus.available;
+                final loc = ParkingLocation(
+                  id: id,
+                  name: name.isEmpty ? 'Lokasi Baru' : name,
+                  address: address.isEmpty ? 'Belum ada alamat' : address,
+                  coordinates: pos,
+                  status: status,
+                  totalCapacity: total,
+                  availableSpots: empty,
+                  pricePerHour: 5000,
+                  vehicleType: 'both',
+                  parkingType: 'both',
+                  securityLevel: 'medium',
+                  hasCctv: true,
+                  isWellLit: true,
+                  lastUpdated: DateTime.now(),
+                );
+                map.addOrUpdateParkingLocation(loc);
+                map.selectParking(loc);
+                map.navigateToParkingWithDirections(loc);
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('Simpan & Navigasi'),
+            ),
+          ],
+        );
+      },
     );
   }
 

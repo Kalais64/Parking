@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import '../controllers/map_controller.dart';
 import '../constants/app_colors.dart';
 import '../models/parking_location.dart';
+import '../controllers/parking_detection_controller.dart';
+import '../screens/simulation/parking_simulation_screen.dart';
 
 class MapView extends StatefulWidget {
   const MapView({super.key});
@@ -14,6 +16,9 @@ class MapView extends StatefulWidget {
 
 class _MapViewState extends State<MapView> {
   late MapController _controller;
+  bool _isAddMode = false;
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _addressController = TextEditingController();
 
   @override
   void initState() {
@@ -24,6 +29,8 @@ class _MapViewState extends State<MapView> {
   @override
   void dispose() {
     _controller.dispose();
+    _nameController.dispose();
+    _addressController.dispose();
     super.dispose();
   }
 
@@ -35,23 +42,31 @@ class _MapViewState extends State<MapView> {
         builder: (context, controller, child) {
           return Stack(
             children: [
-              // Google Map
-              GoogleMap(
-                onMapCreated: controller.onMapCreated,
-                initialCameraPosition: const CameraPosition(
-                  target: LatLng(-6.2088, 106.8456), // Jakarta
-                  zoom: 15.0,
+              HeroMode(
+                enabled: false,
+                child: GoogleMap(
+                  onMapCreated: controller.onMapCreated,
+                  initialCameraPosition: const CameraPosition(
+                    target: LatLng(-6.2088, 106.8456), // Jakarta
+                    zoom: 15.0,
+                  ),
+                  markers: controller.markers,
+                  circles: controller.circles,
+                  polylines: controller.polylines,
+                  myLocationEnabled: true,
+                  myLocationButtonEnabled: false,
+                  compassEnabled: true,
+                  trafficEnabled: controller.showTraffic,
+                  mapType: controller.showSatellite ? MapType.satellite : MapType.normal,
+                  onCameraMove: controller.onCameraMove,
+                  onTap: (pos) {
+                    if (_isAddMode) {
+                      setState(() { _isAddMode = false; });
+                      _showAddLocationAt(pos, controller);
+                    }
+                  },
+                  padding: const EdgeInsets.only(top: 100, bottom: 150),
                 ),
-                markers: controller.markers,
-                circles: controller.circles,
-                polylines: controller.polylines,
-                myLocationEnabled: true,
-                myLocationButtonEnabled: false,
-                compassEnabled: true,
-                trafficEnabled: controller.showTraffic,
-                mapType: controller.showSatellite ? MapType.satellite : MapType.normal,
-                onCameraMove: controller.onCameraMove,
-                padding: const EdgeInsets.only(top: 100, bottom: 150),
               ),
 
               // Loading indicator
@@ -101,6 +116,19 @@ class _MapViewState extends State<MapView> {
                 right: 16,
                 child: Column(
                   children: [
+                    FloatingActionButton(
+                      heroTag: 'add_location',
+                      mini: true,
+                      backgroundColor: Colors.white,
+                      onPressed: () {
+                        setState(() { _isAddMode = true; });
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Tap peta untuk pilih titik lokasi baru')),
+                        );
+                      },
+                      child: const Icon(Icons.add_location_alt, color: AppColors.primary),
+                    ),
+                    const SizedBox(height: 8),
                     // Tracking button
                     FloatingActionButton(
                       heroTag: 'tracking',
@@ -330,6 +358,104 @@ class _MapViewState extends State<MapView> {
     );
   }
 
+  Future<void> _showAddLocationAt(LatLng pos, MapController map) async {
+    final det = context.read<ParkingDetectionController>();
+    _nameController.text = '';
+    _addressController.text = '';
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Tambah Lokasi Parkir'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _nameController,
+                decoration: const InputDecoration(labelText: 'Nama Lokasi'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _addressController,
+                decoration: const InputDecoration(labelText: 'Alamat (opsional)'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Batal'),
+            ),
+            TextButton(
+              onPressed: () {
+                final id = 'custom_${DateTime.now().millisecondsSinceEpoch}';
+                final name = _nameController.text.trim();
+                final address = _addressController.text.trim();
+                final total = det.totalSlots;
+                final empty = det.emptySlots;
+                final status = empty == 0
+                    ? ParkingStatus.full
+                    : (empty < (total * 0.2))
+                        ? ParkingStatus.gettingFull
+                        : ParkingStatus.available;
+                final loc = ParkingLocation(
+                  id: id,
+                  name: name.isEmpty ? 'Lokasi Baru' : name,
+                  address: address.isEmpty ? 'Belum ada alamat' : address,
+                  coordinates: pos,
+                  status: status,
+                  totalCapacity: total,
+                  availableSpots: empty,
+                  pricePerHour: 5000,
+                  vehicleType: 'both',
+                  parkingType: 'both',
+                  securityLevel: 'medium',
+                  hasCctv: true,
+                  isWellLit: true,
+                  lastUpdated: DateTime.now(),
+                );
+                map.addOrUpdateParkingLocation(loc);
+                map.selectParking(loc);
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('Simpan'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final id = 'custom_${DateTime.now().millisecondsSinceEpoch}';
+                final name = _nameController.text.trim();
+                final address = _addressController.text.trim();
+                final loc = ParkingLocation(
+                  id: id,
+                  name: name.isEmpty ? 'Lokasi Baru' : name,
+                  address: address.isEmpty ? 'Belum ada alamat' : address,
+                  coordinates: pos,
+                  status: ParkingStatus.available,
+                  totalCapacity: 0,
+                  availableSpots: 0,
+                  pricePerHour: 5000,
+                  vehicleType: 'both',
+                  parkingType: 'both',
+                  securityLevel: 'medium',
+                  hasCctv: true,
+                  isWellLit: true,
+                  lastUpdated: DateTime.now(),
+                );
+                map.addOrUpdateParkingLocation(loc);
+                map.selectParking(loc);
+                Navigator.of(ctx).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const ParkingSimulationScreen()),
+                );
+              },
+              child: const Text('Scan via Kamera'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Widget _buildLegendItem(Color color, String text) {
     return Row(
       children: [
@@ -419,6 +545,31 @@ class _MapViewState extends State<MapView> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                     ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      final det = context.read<ParkingDetectionController>();
+                      final total = det.totalSlots;
+                      final empty = det.emptySlots;
+                      final status = empty == 0
+                          ? ParkingStatus.full
+                          : (empty < (total * 0.2))
+                              ? ParkingStatus.gettingFull
+                              : ParkingStatus.available;
+                      final updated = parking.copyWith(
+                        totalCapacity: total,
+                        availableSpots: empty,
+                        status: status,
+                        lastUpdated: DateTime.now(),
+                      );
+                      controller.addOrUpdateParkingLocation(updated);
+                      controller.selectParking(updated);
+                    },
+                    icon: const Icon(Icons.update),
+                    label: const Text('Update Data'),
                   ),
                 ),
                 const SizedBox(width: 8),
