@@ -194,6 +194,53 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
           const SizedBox(height: 8),
           Row(
             children: [
+              const Text('Sensitivity:', style: TextStyle(color: Colors.white, fontSize: 16)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Slider(
+                  value: controller.occupancyRatio,
+                  min: 0.15,
+                  max: 0.55,
+                  divisions: 40,
+                  label: controller.occupancyRatio.toStringAsFixed(2),
+                  onChanged: (v) => controller.setOccupancyRatio(v),
+                ),
+              ),
+              const SizedBox(width: 16),
+              const Text('Padding:', style: TextStyle(color: Colors.white, fontSize: 16)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Slider(
+                  value: controller.innerPadding,
+                  min: 0.0,
+                  max: 0.25,
+                  divisions: 25,
+                  label: controller.innerPadding.toStringAsFixed(2),
+                  onChanged: (v) => controller.setInnerPadding(v),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const Text('Edge:', style: TextStyle(color: Colors.white, fontSize: 16)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Slider(
+                  value: controller.edgeRatioThreshold,
+                  min: 0.05,
+                  max: 0.30,
+                  divisions: 25,
+                  label: controller.edgeRatioThreshold.toStringAsFixed(2),
+                  onChanged: (v) => controller.setEdgeRatioThreshold(v),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
               const Text('Grid:', style: TextStyle(color: Colors.white, fontSize: 16)),
               const SizedBox(width: 8),
               Text('${controller.gridRows} × ${controller.gridCols}', style: const TextStyle(color: Colors.white, fontSize: 16)),

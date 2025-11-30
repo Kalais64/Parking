@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 import 'package:firebase_database/firebase_database.dart';
+import 'dart:math' as math;
 import '../models/notification.dart';
 import '../services/notification_service.dart';
 import '../models/parking_slot.dart';
@@ -34,6 +35,11 @@ class ParkingDetectionController extends ChangeNotifier {
   double _statusMargin = 15.0;
   int _gridRows = 2;
   int _gridCols = 4;
+  double _occupancyRatio = 0.35;
+  double _sigmaThreshold = 40.0;
+  double _innerPadding = 0.10;
+  double _edgeRatioThreshold = 0.10;
+  int _edgeMagThreshold = 40;
 
   List<ParkingSlot> get slots => _slots;
   CameraController? get cameraController => _cameraController;
@@ -46,6 +52,11 @@ class ParkingDetectionController extends ChangeNotifier {
   Uint8List? get selectedImageBytes => _selectedImageBytes;
   int get gridRows => _gridRows;
   int get gridCols => _gridCols;
+  double get occupancyRatio => _occupancyRatio;
+  double get sigmaThreshold => _sigmaThreshold;
+  double get innerPadding => _innerPadding;
+  double get edgeRatioThreshold => _edgeRatioThreshold;
+  int get edgeMagThreshold => _edgeMagThreshold;
 
   ParkingDetectionController() {
     _initializeSlots();
@@ -65,6 +76,31 @@ class ParkingDetectionController extends ChangeNotifier {
     _gridCols = cols.clamp(2, 10);
     _generateSlotsFromGrid();
     _updateStats();
+    notifyListeners();
+  }
+
+  void setOccupancyRatio(double v) {
+    _occupancyRatio = v.clamp(0.05, 0.95);
+    notifyListeners();
+  }
+
+  void setSigmaThreshold(double v) {
+    _sigmaThreshold = v.clamp(5.0, 120.0);
+    notifyListeners();
+  }
+
+  void setInnerPadding(double v) {
+    _innerPadding = v.clamp(0.0, 0.3);
+    notifyListeners();
+  }
+
+  void setEdgeRatioThreshold(double v) {
+    _edgeRatioThreshold = v.clamp(0.01, 0.5);
+    notifyListeners();
+  }
+
+  void setEdgeMagThreshold(int v) {
+    _edgeMagThreshold = v.clamp(5, 255);
     notifyListeners();
   }
 
@@ -179,25 +215,23 @@ class ParkingDetectionController extends ChangeNotifier {
     _isProcessing = true;
     
     try {
-      // Process each slot
       for (int i = 0; i < _slots.length; i++) {
         final slot = _slots[i];
-        final double avgBrightness = _calculateSlotBrightness(image, slot.rect);
-        
-        final bool candidateOccupied =
-            avgBrightness < (slot.threshold - _statusMargin)
-                ? true
-                : avgBrightness > (slot.threshold + _statusMargin)
-                    ? false
-                    : slot.isOccupied;
-        
-        // Update slot if status changed or brightness changed significantly
-        if (slot.isOccupied != candidateOccupied || (slot.currentBrightness - avgBrightness).abs() > 5) {
-          _slots[i] = slot.copyWith(
-            currentBrightness: avgBrightness,
-            isOccupied: candidateOccupied,
-          );
-        }
+        final rect = _innerRect(slot.rect, _innerPadding);
+        final histResult = _calculateHistogramFromCamera(image, rect);
+        final List<int> hist = histResult.$1;
+        final int total = histResult.$2;
+        final int otsu = _otsuThreshold(hist, total);
+        final stats = _calculateStatsFromCamera(image, rect, otsu);
+        final double avgBrightness = stats.$1;
+        final double darkRatio = stats.$2;
+        final double edgeDensity = _edgeDensityFromCamera(image, rect, _edgeMagThreshold);
+        final bool candidateOccupied = darkRatio > _occupancyRatio && edgeDensity > _edgeRatioThreshold;
+        _slots[i] = slot.copyWith(
+          currentBrightness: avgBrightness,
+          threshold: otsu.toDouble(),
+          isOccupied: candidateOccupied,
+        );
       }
       
       _updateStats();
@@ -241,6 +275,65 @@ class ParkingDetectionController extends ChangeNotifier {
 
     if (pixelCount == 0) return 0.0;
     return totalBrightness / pixelCount;
+  }
+
+  (List<int>, int) _calculateHistogramFromCamera(CameraImage image, Rect normalizedRect) {
+    final Plane plane = image.planes[0];
+    final int width = image.width;
+    final int height = image.height;
+    final Uint8List bytes = plane.bytes;
+    final int startX = (normalizedRect.left * width).toInt().clamp(0, width - 1);
+    final int startY = (normalizedRect.top * height).toInt().clamp(0, height - 1);
+    final int endX = (normalizedRect.right * width).toInt().clamp(0, width - 1);
+    final int endY = (normalizedRect.bottom * height).toInt().clamp(0, height - 1);
+    final List<int> hist = List<int>.filled(256, 0);
+    int total = 0;
+    const int step = 4;
+    for (int y = startY; y < endY; y += step) {
+      for (int x = startX; x < endX; x += step) {
+        final int index = y * plane.bytesPerRow + x;
+        if (index < bytes.length) {
+          final int v = bytes[index];
+          hist[v]++;
+          total++;
+        }
+      }
+    }
+    return (hist, total);
+  }
+
+  (double, double, double) _calculateStatsFromCamera(CameraImage image, Rect normalizedRect, int threshold) {
+    final Plane plane = image.planes[0];
+    final int width = image.width;
+    final int height = image.height;
+    final Uint8List bytes = plane.bytes;
+    final int startX = (normalizedRect.left * width).toInt().clamp(0, width - 1);
+    final int startY = (normalizedRect.top * height).toInt().clamp(0, height - 1);
+    final int endX = (normalizedRect.right * width).toInt().clamp(0, width - 1);
+    final int endY = (normalizedRect.bottom * height).toInt().clamp(0, height - 1);
+    int sum = 0;
+    int sumSq = 0;
+    int dark = 0;
+    int count = 0;
+    const int step = 4;
+    for (int y = startY; y < endY; y += step) {
+      for (int x = startX; x < endX; x += step) {
+        final int index = y * plane.bytesPerRow + x;
+        if (index < bytes.length) {
+          final int v = bytes[index];
+          sum += v;
+          sumSq += v * v;
+          if (v <= threshold) dark++;
+          count++;
+        }
+      }
+    }
+    if (count == 0) return (0.0, 0.0, 0.0);
+    final double avg = sum / count;
+    final double variance = (sumSq / count) - (avg * avg);
+    final double sigma = variance < 0 ? 0.0 : math.sqrt(variance);
+    final double darkRatio = dark / count;
+    return (avg, darkRatio, sigma);
   }
 
   void _updateStats() {
@@ -339,32 +432,16 @@ class ParkingDetectionController extends ChangeNotifier {
   void _processStaticImageAdaptive(img.Image image, {double occupancyRatio = 0.35}) {
     for (int i = 0; i < _slots.length; i++) {
       final slot = _slots[i];
-      final histResult = _calculateHistogramFromImage(image, slot.rect);
+      final rect = _innerRect(slot.rect, _innerPadding);
+      final histResult = _calculateHistogramFromImage(image, rect);
       final List<int> hist = histResult.$1;
       final int total = histResult.$2;
       final int otsu = _otsuThreshold(hist, total);
-      int darkCount = 0;
-      int sumBrightness = 0;
-      int count = 0;
-      final int width = image.width;
-      final int height = image.height;
-      final int startX = (slot.rect.left * width).toInt().clamp(0, width - 1);
-      final int startY = (slot.rect.top * height).toInt().clamp(0, height - 1);
-      final int endX = (slot.rect.right * width).toInt().clamp(0, width - 1);
-      final int endY = (slot.rect.bottom * height).toInt().clamp(0, height - 1);
-      const int step = 4;
-      for (int y = startY; y < endY; y += step) {
-        for (int x = startX; x < endX; x += step) {
-          final p = image.getPixel(x, y);
-          final int v = ((p.r + p.g + p.b) ~/ 3);
-          if (v <= otsu) darkCount++;
-          sumBrightness += v;
-          count++;
-        }
-      }
-      final double avgBrightness = count == 0 ? 0.0 : sumBrightness / count;
-      final double darkRatio = count == 0 ? 0.0 : darkCount / count;
-      final bool candidateOccupied = darkRatio > occupancyRatio;
+      final stats = _calculateStatsFromImage(image, rect, otsu);
+      final double avgBrightness = stats.$1;
+      final double darkRatio = stats.$2;
+      final double edgeDensity = _edgeDensityFromImage(image, rect, _edgeMagThreshold);
+      final bool candidateOccupied = darkRatio > _occupancyRatio && edgeDensity > _edgeRatioThreshold;
       _slots[i] = slot.copyWith(
         currentBrightness: avgBrightness,
         threshold: otsu.toDouble(),
@@ -395,6 +472,111 @@ class ParkingDetectionController extends ChangeNotifier {
     return (hist, total);
   }
 
+  (double, double, double) _calculateStatsFromImage(img.Image image, Rect normalizedRect, int threshold) {
+    final int width = image.width;
+    final int height = image.height;
+    final int startX = (normalizedRect.left * width).toInt().clamp(0, width - 1);
+    final int startY = (normalizedRect.top * height).toInt().clamp(0, height - 1);
+    final int endX = (normalizedRect.right * width).toInt().clamp(0, width - 1);
+    final int endY = (normalizedRect.bottom * height).toInt().clamp(0, height - 1);
+    int sumBrightness = 0;
+    int sumSq = 0;
+    int darkCount = 0;
+    int count = 0;
+    const int step = 4;
+    for (int y = startY; y < endY; y += step) {
+      for (int x = startX; x < endX; x += step) {
+        final p = image.getPixel(x, y);
+        final int v = ((p.r + p.g + p.b) ~/ 3);
+        sumBrightness += v;
+        sumSq += v * v;
+        if (v <= threshold) darkCount++;
+        count++;
+      }
+    }
+    if (count == 0) return (0.0, 0.0, 0.0);
+    final double avgBrightness = sumBrightness / count;
+    final double variance = (sumSq / count) - (avgBrightness * avgBrightness);
+    final double sigma = variance < 0 ? 0.0 : math.sqrt(variance);
+    final double darkRatio = darkCount / count;
+    return (avgBrightness, darkRatio, sigma);
+  }
+
+  double _edgeDensityFromImage(img.Image image, Rect normalizedRect, int magThreshold) {
+    final int width = image.width;
+    final int height = image.height;
+    final int startX = (normalizedRect.left * width).toInt().clamp(1, width - 2);
+    final int startY = (normalizedRect.top * height).toInt().clamp(1, height - 2);
+    final int endX = (normalizedRect.right * width).toInt().clamp(1, width - 2);
+    final int endY = (normalizedRect.bottom * height).toInt().clamp(1, height - 2);
+    int edges = 0;
+    int count = 0;
+    const int step = 2;
+    for (int y = startY; y < endY; y += step) {
+      for (int x = startX; x < endX; x += step) {
+        int p00 = ((image.getPixel(x - 1, y - 1).r + image.getPixel(x - 1, y - 1).g + image.getPixel(x - 1, y - 1).b) ~/ 3);
+        int p10 = ((image.getPixel(x, y - 1).r + image.getPixel(x, y - 1).g + image.getPixel(x, y - 1).b) ~/ 3);
+        int p20 = ((image.getPixel(x + 1, y - 1).r + image.getPixel(x + 1, y - 1).g + image.getPixel(x + 1, y - 1).b) ~/ 3);
+        int p01 = ((image.getPixel(x - 1, y).r + image.getPixel(x - 1, y).g + image.getPixel(x - 1, y).b) ~/ 3);
+        int p21 = ((image.getPixel(x + 1, y).r + image.getPixel(x + 1, y).g + image.getPixel(x + 1, y).b) ~/ 3);
+        int p02 = ((image.getPixel(x - 1, y + 1).r + image.getPixel(x - 1, y + 1).g + image.getPixel(x - 1, y + 1).b) ~/ 3);
+        int p12 = ((image.getPixel(x, y + 1).r + image.getPixel(x, y + 1).g + image.getPixel(x, y + 1).b) ~/ 3);
+        int p22 = ((image.getPixel(x + 1, y + 1).r + image.getPixel(x + 1, y + 1).g + image.getPixel(x + 1, y + 1).b) ~/ 3);
+        int gx = -p00 + p20 - 2 * p01 + 2 * p21 - p02 + p22;
+        int gy = -p00 - 2 * p10 - p20 + p02 + 2 * p12 + p22;
+        double mag = math.sqrt((gx * gx + gy * gy).toDouble());
+        if (mag >= magThreshold) edges++;
+        count++;
+      }
+    }
+    if (count == 0) return 0.0;
+    return edges / count;
+  }
+
+  double _edgeDensityFromCamera(CameraImage image, Rect normalizedRect, int magThreshold) {
+    final Plane plane = image.planes[0];
+    final int width = image.width;
+    final int height = image.height;
+    final Uint8List bytes = plane.bytes;
+    final int startX = (normalizedRect.left * width).toInt().clamp(1, width - 2);
+    final int startY = (normalizedRect.top * height).toInt().clamp(1, height - 2);
+    final int endX = (normalizedRect.right * width).toInt().clamp(1, width - 2);
+    final int endY = (normalizedRect.bottom * height).toInt().clamp(1, height - 2);
+    int edges = 0;
+    int count = 0;
+    const int step = 2;
+    for (int y = startY; y < endY; y += step) {
+      for (int x = startX; x < endX; x += step) {
+        int p00 = bytes[(y - 1) * plane.bytesPerRow + (x - 1)];
+        int p10 = bytes[(y - 1) * plane.bytesPerRow + x];
+        int p20 = bytes[(y - 1) * plane.bytesPerRow + (x + 1)];
+        int p01 = bytes[y * plane.bytesPerRow + (x - 1)];
+        int p21 = bytes[y * plane.bytesPerRow + (x + 1)];
+        int p02 = bytes[(y + 1) * plane.bytesPerRow + (x - 1)];
+        int p12 = bytes[(y + 1) * plane.bytesPerRow + x];
+        int p22 = bytes[(y + 1) * plane.bytesPerRow + (x + 1)];
+        int gx = -p00 + p20 - 2 * p01 + 2 * p21 - p02 + p22;
+        int gy = -p00 - 2 * p10 - p20 + p02 + 2 * p12 + p22;
+        double mag = math.sqrt((gx * gx + gy * gy).toDouble());
+        if (mag >= magThreshold) edges++;
+        count++;
+      }
+    }
+    if (count == 0) return 0.0;
+    return edges / count;
+  }
+
+  Rect _innerRect(Rect r, double pad) {
+    final double px = (r.width * pad);
+    final double py = (r.height * pad);
+    final double left = (r.left + px).clamp(0.0, 1.0);
+    final double top = (r.top + py).clamp(0.0, 1.0);
+    final double right = (r.right - px).clamp(0.0, 1.0);
+    final double bottom = (r.bottom - py).clamp(0.0, 1.0);
+    final double w = (right - left).clamp(0.01, 1.0);
+    final double h = (bottom - top).clamp(0.01, 1.0);
+    return Rect.fromLTWH(left, top, w, h);
+  }
   int _otsuThreshold(List<int> hist, int total) {
     if (total == 0) return 128;
     double sum = 0;
