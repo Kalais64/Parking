@@ -12,6 +12,8 @@ class ParkingSlot {
   double sigma;
   double chroma;
   double colorRatio;
+  double aiConfidence;
+  bool aiOccupied;
 
   ParkingSlot({
     required this.id,
@@ -24,6 +26,8 @@ class ParkingSlot {
     this.sigma = 0.0,
     this.chroma = 0.0,
     this.colorRatio = 0.0,
+    this.aiConfidence = 0.0,
+    this.aiOccupied = false,
   });
 
   // Create a copy with updated status
@@ -37,6 +41,8 @@ class ParkingSlot {
     double? sigma,
     double? chroma,
     double? colorRatio,
+    double? aiConfidence,
+    bool? aiOccupied,
   }) {
     return ParkingSlot(
       id: id,
@@ -49,6 +55,8 @@ class ParkingSlot {
       sigma: sigma ?? this.sigma,
       chroma: chroma ?? this.chroma,
       colorRatio: colorRatio ?? this.colorRatio,
+      aiConfidence: aiConfidence ?? this.aiConfidence,
+      aiOccupied: aiOccupied ?? this.aiOccupied,
     );
   }
 }

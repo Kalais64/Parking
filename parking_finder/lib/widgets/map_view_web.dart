@@ -5,6 +5,8 @@ import 'package:latlong2/latlong.dart' as latlong;
 import '../constants/app_colors.dart';
 import '../models/parking_location.dart';
 import '../controllers/map_controller.dart' as app_controller;
+import '../controllers/parking_detection_controller.dart';
+import '../services/ai_inference_service.dart';
 
 class MapViewWeb extends StatefulWidget {
   const MapViewWeb({super.key});
@@ -220,6 +222,15 @@ class _MapViewWebState extends State<MapViewWeb> {
                     backgroundColor: Colors.white,
                     onPressed: controller.refreshParkingData,
                     child: const Icon(Icons.refresh, color: AppColors.primary),
+                  ),
+                  const SizedBox(height: 8),
+                  // AI Settings button
+                  FloatingActionButton(
+                    heroTag: 'ai_settings',
+                    mini: true,
+                    backgroundColor: Colors.white,
+                    onPressed: _showAiSettings,
+                    child: const Icon(Icons.smart_toy, color: AppColors.primary),
                   ),
                 ],
               ),
@@ -510,6 +521,69 @@ class _MapViewWebState extends State<MapViewWeb> {
     // This would navigate to detail screen
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Menampilkan detail ${parking.name}')),
+    );
+  }
+
+  void _showAiSettings() {
+    final det = context.read<ParkingDetectionController>();
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) {
+        AiMode mode = det.aiMode;
+        return Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('AI Mode', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: const Icon(Icons.block),
+                title: const Text('Off'),
+                trailing: Radio<AiMode>(
+                  value: AiMode.off,
+                  groupValue: mode,
+                  onChanged: (m) {
+                    if (m != null) {
+                      det.setAiMode(m);
+                      Navigator.pop(ctx);
+                    }
+                  },
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.merge_type),
+                title: const Text('Hybrid'),
+                trailing: Radio<AiMode>(
+                  value: AiMode.hybrid,
+                  groupValue: mode,
+                  onChanged: (m) {
+                    if (m != null) {
+                      det.setAiMode(m);
+                      Navigator.pop(ctx);
+                    }
+                  },
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.precision_manufacturing),
+                title: const Text('Detector'),
+                trailing: Radio<AiMode>(
+                  value: AiMode.detector,
+                  groupValue: mode,
+                  onChanged: (m) {
+                    if (m != null) {
+                      det.setAiMode(m);
+                      Navigator.pop(ctx);
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -5,6 +5,8 @@ import 'package:provider/provider.dart';
 import '../controllers/map_controller.dart' as app_controller;
 import '../constants/app_colors_new.dart';
 import '../models/parking_location.dart';
+import '../controllers/parking_detection_controller.dart';
+import '../services/ai_inference_service.dart';
 
 class MapViewOSM extends StatefulWidget {
   const MapViewOSM({super.key});
@@ -223,6 +225,11 @@ class _MapViewOSMState extends State<MapViewOSM> {
                           Icons.refresh,
                           onPressed: controller.refreshParkingData,
                         ),
+                        const SizedBox(height: 12),
+                        _buildControlButton(
+                          Icons.smart_toy,
+                          onPressed: _showAiSettings,
+                        ),
                       ],
                     ),
                   ),
@@ -242,6 +249,70 @@ class _MapViewOSMState extends State<MapViewOSM> {
             ),
           );
         },
+    );
+  }
+
+  void _showAiSettings() {
+    final det = context.read<ParkingDetectionController>();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColorsNew.surface,
+      builder: (ctx) {
+        AiMode mode = det.aiMode;
+        return Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('AI Mode', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColorsNew.textPrimary)),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: const Icon(Icons.block),
+                title: const Text('Off'),
+                trailing: Radio<AiMode>(
+                  value: AiMode.off,
+                  groupValue: mode,
+                  onChanged: (m) {
+                    if (m != null) {
+                      det.setAiMode(m);
+                      Navigator.pop(ctx);
+                    }
+                  },
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.merge_type),
+                title: const Text('Hybrid'),
+                trailing: Radio<AiMode>(
+                  value: AiMode.hybrid,
+                  groupValue: mode,
+                  onChanged: (m) {
+                    if (m != null) {
+                      det.setAiMode(m);
+                      Navigator.pop(ctx);
+                    }
+                  },
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.precision_manufacturing),
+                title: const Text('Detector'),
+                trailing: Radio<AiMode>(
+                  value: AiMode.detector,
+                  groupValue: mode,
+                  onChanged: (m) {
+                    if (m != null) {
+                      det.setAiMode(m);
+                      Navigator.pop(ctx);
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 

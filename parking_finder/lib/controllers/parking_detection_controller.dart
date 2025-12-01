@@ -11,6 +11,7 @@ import '../models/notification.dart';
 import '../services/notification_service.dart';
 import '../models/parking_slot.dart';
 import 'map_controller.dart';
+import '../services/ai_inference_service.dart';
 
 class ParkingDetectionController extends ChangeNotifier {
   CameraController? _cameraController;
@@ -53,6 +54,8 @@ class ParkingDetectionController extends ChangeNotifier {
   int _edgeMagThreshold = 40;
   double _chromaThreshold = 30.0;
   double _colorRatioThreshold = 0.20;
+  AiMode _aiMode = AiMode.off;
+  final AiInferenceService _aiService = AiInferenceService();
 
   List<ParkingSlot> get slots => _slots;
   CameraController? get cameraController => _cameraController;
@@ -84,6 +87,7 @@ class ParkingDetectionController extends ChangeNotifier {
   }
 
   bool get autoLiveCalibrationEnabled => _autoLiveCalibrationEnabled;
+  AiMode get aiMode => _aiMode;
 
   ParkingDetectionController() {
     _initializeSlots();
@@ -133,6 +137,11 @@ class ParkingDetectionController extends ChangeNotifier {
 
   void setColorRatioThreshold(double v) {
     _colorRatioThreshold = v.clamp(0.05, 0.80);
+    notifyListeners();
+  }
+
+  void setAiMode(AiMode m) {
+    _aiMode = m;
     notifyListeners();
   }
 
@@ -323,15 +332,30 @@ class ParkingDetectionController extends ChangeNotifier {
         final bool colorOccupied = avgChroma > _chromaThreshold || colorRatio > _colorRatioThreshold;
         final bool textureOccupied = edgeDensity > _edgeRatioThreshold || sigma > _sigmaThreshold;
         final bool candidateOccupied = (darknessOccupied || colorOccupied) && textureOccupied;
+        double score = 0.0;
+        score += darkRatio.clamp(0.0, 1.0) * 0.35;
+        score += edgeDensity.clamp(0.0, 1.0) * 0.25;
+        score += colorRatio.clamp(0.0, 1.0) * 0.20;
+        score += (math.min(sigma, 128.0) / 128.0) * 0.20;
+        final double aiConf = score.clamp(0.0, 1.0);
+        final bool aiOcc = aiConf >= 0.45;
+        bool finalOcc = candidateOccupied;
+        if (_aiMode == AiMode.detector) {
+          finalOcc = aiConf >= 0.45 ? aiOcc : candidateOccupied;
+        } else if (_aiMode == AiMode.hybrid) {
+          if (aiConf >= 0.65) finalOcc = aiOcc;
+        }
         _slots[i] = slot.copyWith(
           currentBrightness: avgBrightness,
           threshold: otsu.toDouble(),
-          isOccupied: candidateOccupied,
+          isOccupied: finalOcc,
           darkRatio: darkRatio,
           edgeDensity: edgeDensity,
           sigma: sigma,
           chroma: avgChroma,
           colorRatio: colorRatio,
+          aiConfidence: aiConf,
+          aiOccupied: aiOcc,
         );
       }
       
@@ -684,6 +708,27 @@ class ParkingDetectionController extends ChangeNotifier {
         edgeDensity: edgeDensity,
         sigma: sigma,
       );
+    }
+    if (_aiMode != AiMode.off) {
+      final aiResults = _aiService.inferImage(image, _slots, innerPadding: _innerPadding);
+      final Map<String, AiSlotResult> map = {for (final r in aiResults) r.id: r};
+      for (int i = 0; i < _slots.length; i++) {
+        final s = _slots[i];
+        final r = map[s.id];
+        if (r != null) {
+          bool finalOcc = s.isOccupied;
+          if (_aiMode == AiMode.detector) {
+            finalOcc = r.confidence >= 0.45 ? r.occupied : s.isOccupied;
+          } else {
+            if (r.confidence >= 0.65) finalOcc = r.occupied;
+          }
+          _slots[i] = s.copyWith(
+            isOccupied: finalOcc,
+            aiConfidence: r.confidence,
+            aiOccupied: r.occupied,
+          );
+        }
+      }
     }
     _updateStats();
   }

@@ -1,6 +1,7 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import '../../services/ai_inference_service.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import '../../controllers/parking_detection_controller.dart';
@@ -257,6 +258,25 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
           const SizedBox(height: 8),
           Row(
             children: [
+              const Text('AI Mode:', style: TextStyle(color: Colors.white, fontSize: 16)),
+              const SizedBox(width: 8),
+              DropdownButton<AiMode>(
+                value: controller.aiMode,
+                dropdownColor: Colors.black,
+                items: const [
+                  DropdownMenuItem(value: AiMode.off, child: Text('Off', style: TextStyle(color: Colors.white))),
+                  DropdownMenuItem(value: AiMode.hybrid, child: Text('Hybrid', style: TextStyle(color: Colors.white))),
+                  DropdownMenuItem(value: AiMode.detector, child: Text('Detector', style: TextStyle(color: Colors.white))),
+                ],
+                onChanged: (m) {
+                  if (m != null) controller.setAiMode(m);
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
               const Text('Chroma:', style: TextStyle(color: Colors.white, fontSize: 16)),
               const SizedBox(width: 8),
               Expanded(
@@ -364,7 +384,7 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
             child: ListTile(
               leading: CircleAvatar(backgroundColor: slot.isOccupied ? Colors.red : Colors.green, child: Text(slot.id, style: const TextStyle(color: Colors.white))),
               title: Text('Brightness: ${slot.currentBrightness.toStringAsFixed(1)}', style: const TextStyle(color: Colors.white70)),
-              subtitle: Text('Thresh: ${slot.threshold.toStringAsFixed(1)}  Dark: ${slot.darkRatio.toStringAsFixed(2)}  Edge: ${slot.edgeDensity.toStringAsFixed(2)}  Sigma: ${slot.sigma.toStringAsFixed(1)}  Chrom: ${slot.chroma.toStringAsFixed(1)}  Color: ${slot.colorRatio.toStringAsFixed(2)}', style: const TextStyle(color: Colors.grey)),
+              subtitle: Text('Thresh: ${slot.threshold.toStringAsFixed(1)}  Dark: ${slot.darkRatio.toStringAsFixed(2)}  Edge: ${slot.edgeDensity.toStringAsFixed(2)}  Sigma: ${slot.sigma.toStringAsFixed(1)}  Chrom: ${slot.chroma.toStringAsFixed(1)}  Color: ${slot.colorRatio.toStringAsFixed(2)}  AI:${slot.aiConfidence.toStringAsFixed(2)}', style: const TextStyle(color: Colors.grey)),
               trailing: Text(slot.isOccupied ? 'TERISI' : 'KOSONG', style: TextStyle(color: slot.isOccupied ? Colors.redAccent : Colors.greenAccent, fontWeight: FontWeight.bold)),
               onTap: () { setState(() { _selectedSlotId = slot.id; }); },
             ),
@@ -500,8 +520,8 @@ class SlotOverlayPainter extends CustomPainter {
       textPainter.layout();
       textPainter.paint(canvas, Offset(rect.left + 5, rect.top + 2));
 
-      final String metrics = 'E:${slot.edgeDensity.toStringAsFixed(2)} D:${slot.darkRatio.toStringAsFixed(2)} S:${slot.sigma.toStringAsFixed(1)} C:${slot.chroma.toStringAsFixed(0)} R:${slot.colorRatio.toStringAsFixed(2)}';
-      final double metricsWidth = rect.width.clamp(120.0, 180.0);
+      final String metrics = 'E:${slot.edgeDensity.toStringAsFixed(2)} D:${slot.darkRatio.toStringAsFixed(2)} S:${slot.sigma.toStringAsFixed(1)} C:${slot.chroma.toStringAsFixed(0)} R:${slot.colorRatio.toStringAsFixed(2)} AI:${slot.aiConfidence.toStringAsFixed(2)}';
+      final double metricsWidth = rect.width.clamp(150.0, 220.0);
       canvas.drawRect(
         Rect.fromLTWH(rect.right - metricsWidth, rect.top, metricsWidth, 20),
         bgPaint,
