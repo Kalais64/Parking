@@ -13,6 +13,8 @@ import '../../widgets/voice_search_widget.dart';
 import '../../widgets/voice_search_dialog.dart';
 import '../../widgets/navigation_control_widget.dart';
 import '../../widgets/filter_dialog.dart';
+import '../../services/camera_scan_service.dart';
+import '../../controllers/parking_detection_controller.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -56,6 +58,9 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _selectedIndex = index;
     });
+    if (index == 0) {
+      _ensureNoCameraActive();
+    }
   }
 
   void _showVoiceSearchDialog() {
@@ -77,6 +82,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_selectedIndex == 0) {
+      _ensureNoCameraActive();
+    }
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: false,
@@ -180,5 +188,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 )
               : null,
     );
+  }
+
+  void _ensureNoCameraActive() {
+    try {
+      CameraScanService().disposeScanner();
+    } catch (_) {}
+    try {
+      final det = Provider.of<ParkingDetectionController>(context, listen: false);
+      det.releaseCamera();
+    } catch (_) {}
   }
 }

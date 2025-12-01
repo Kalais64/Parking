@@ -167,8 +167,8 @@ class VoiceService extends ChangeNotifier {
           _soundLevelController.add(level);
           notifyListeners();
         },
-        listenFor: const Duration(seconds: 10), // Max listening duration
-        pauseFor: const Duration(seconds: 2), // Pause detection
+        listenFor: const Duration(seconds: 17), // Max listening duration
+        pauseFor: const Duration(seconds: 3), // Pause detection
         partialResults: true,
         cancelOnError: true,
         listenMode: ListenMode.search, // Optimized for search queries

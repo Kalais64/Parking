@@ -29,11 +29,10 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final det = context.read<ParkingDetectionController>();
       det.setMapController(context.read<MapController>());
+      det.setDbSyncEnabled(false);
+      det.resetDetectionState();
       if (!det.isImageMode) {
         det.initializeCamera();
-      }
-      if (!kIsWeb) {
-        det.startRealtimeSubscription();
       }
     });
   }
@@ -111,7 +110,10 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
 
   @override
   void dispose() {
-    context.read<ParkingDetectionController>().stopRealtimeSubscription();
+    final det = context.read<ParkingDetectionController>();
+    det.stopRealtimeSubscription();
+    det.resetDetectionState();
+    det.releaseCamera();
     _nameController.dispose();
     _addressController.dispose();
     super.dispose();
@@ -255,6 +257,36 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
           const SizedBox(height: 8),
           Row(
             children: [
+              const Text('Chroma:', style: TextStyle(color: Colors.white, fontSize: 16)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Slider(
+                  value: controller.chromaThreshold,
+                  min: 15.0,
+                  max: 120.0,
+                  divisions: 21,
+                  label: controller.chromaThreshold.toStringAsFixed(0),
+                  onChanged: (v) => controller.setChromaThreshold(v),
+                ),
+              ),
+              const SizedBox(width: 16),
+              const Text('Color:', style: TextStyle(color: Colors.white, fontSize: 16)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Slider(
+                  value: controller.colorRatioThreshold,
+                  min: 0.05,
+                  max: 0.80,
+                  divisions: 15,
+                  label: controller.colorRatioThreshold.toStringAsFixed(2),
+                  onChanged: (v) => controller.setColorRatioThreshold(v),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
               const Text('Grid:', style: TextStyle(color: Colors.white, fontSize: 16)),
               const SizedBox(width: 8),
               Text('${controller.gridRows} × ${controller.gridCols}', style: const TextStyle(color: Colors.white, fontSize: 16)),
@@ -285,7 +317,22 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
                 onChanged: (v) { if (v != null) controller.setGrid(controller.gridRows, v); },
               ),
               const Spacer(),
-              ElevatedButton(onPressed: () => controller.autoCalibrateFromCurrentImage(), child: const Text('Evaluasi Ulang')),
+              if (controller.isImageMode)
+                ElevatedButton(onPressed: () => controller.autoCalibrateFromCurrentImage(), child: const Text('Evaluasi Ulang'))
+              else ...[
+                ElevatedButton(onPressed: () => controller.autoCalibrateFromLiveMetrics(), child: const Text('Kalibrasi Live')),
+                const SizedBox(width: 8),
+                Row(
+                  children: [
+                    const Text('Auto Live', style: TextStyle(color: Colors.white)),
+                    const SizedBox(width: 6),
+                    Switch(
+                      value: controller.autoLiveCalibrationEnabled,
+                      onChanged: (v) => controller.setAutoLiveCalibrationEnabled(v),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
           if (_isEditMode && _selectedSlotId != null) ...[
@@ -317,7 +364,7 @@ class _ParkingSimulationScreenState extends State<ParkingSimulationScreen> {
             child: ListTile(
               leading: CircleAvatar(backgroundColor: slot.isOccupied ? Colors.red : Colors.green, child: Text(slot.id, style: const TextStyle(color: Colors.white))),
               title: Text('Brightness: ${slot.currentBrightness.toStringAsFixed(1)}', style: const TextStyle(color: Colors.white70)),
-              subtitle: Text('Thresh: ${slot.threshold.toStringAsFixed(1)}  Dark: ${slot.darkRatio.toStringAsFixed(2)}  Edge: ${slot.edgeDensity.toStringAsFixed(2)}  Sigma: ${slot.sigma.toStringAsFixed(1)}', style: const TextStyle(color: Colors.grey)),
+              subtitle: Text('Thresh: ${slot.threshold.toStringAsFixed(1)}  Dark: ${slot.darkRatio.toStringAsFixed(2)}  Edge: ${slot.edgeDensity.toStringAsFixed(2)}  Sigma: ${slot.sigma.toStringAsFixed(1)}  Chrom: ${slot.chroma.toStringAsFixed(1)}  Color: ${slot.colorRatio.toStringAsFixed(2)}', style: const TextStyle(color: Colors.grey)),
               trailing: Text(slot.isOccupied ? 'TERISI' : 'KOSONG', style: TextStyle(color: slot.isOccupied ? Colors.redAccent : Colors.greenAccent, fontWeight: FontWeight.bold)),
               onTap: () { setState(() { _selectedSlotId = slot.id; }); },
             ),
@@ -453,8 +500,8 @@ class SlotOverlayPainter extends CustomPainter {
       textPainter.layout();
       textPainter.paint(canvas, Offset(rect.left + 5, rect.top + 2));
 
-      final String metrics = 'E:${slot.edgeDensity.toStringAsFixed(2)} D:${slot.darkRatio.toStringAsFixed(2)} S:${slot.sigma.toStringAsFixed(1)}';
-      final double metricsWidth = rect.width.clamp(60.0, 120.0);
+      final String metrics = 'E:${slot.edgeDensity.toStringAsFixed(2)} D:${slot.darkRatio.toStringAsFixed(2)} S:${slot.sigma.toStringAsFixed(1)} C:${slot.chroma.toStringAsFixed(0)} R:${slot.colorRatio.toStringAsFixed(2)}';
+      final double metricsWidth = rect.width.clamp(120.0, 180.0);
       canvas.drawRect(
         Rect.fromLTWH(rect.right - metricsWidth, rect.top, metricsWidth, 20),
         bgPaint,

@@ -127,6 +127,7 @@ class _CameraScanPageState extends State<CameraScanPage> with SingleTickerProvid
             _scanStatus = _getScanResultMessage(result);
             _isScanning = false;
           });
+          await _scanService.disposeScanner();
           
           // Auto-process if in payment mode
           if (widget.isForPayment && result.type != ScanType.unknown) {
@@ -188,6 +189,10 @@ class _CameraScanPageState extends State<CameraScanPage> with SingleTickerProvid
         },
         onCancel: () {
           Navigator.pop(context); // Close confirmation dialog
+          setState(() {
+            _isScanning = false;
+          });
+          _scanService.disposeScanner();
         },
       ),
     );
@@ -482,18 +487,24 @@ class _CameraScanPageState extends State<CameraScanPage> with SingleTickerProvid
                 ),
               ),
             )
-          else
-            // Real camera view for mobile platforms
+          else if (_isScanning)
             MobileScanner(
               controller: _scanService.scannerController,
-              onDetect: (barcode) {
-                if (_isScanning && barcode.barcodes.isNotEmpty) {
-                  final data = barcode.barcodes.first.rawValue;
-                  if (data != null && data.isNotEmpty) {
-                    // Handle detection
-                  }
-                }
-              },
+            )
+          else
+            Container(
+              width: double.infinity,
+              height: double.infinity,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Colors.black.withValues(alpha: 0.9),
+                    Colors.black.withValues(alpha: 0.7),
+                  ],
+                ),
+              ),
             ),
           
           // Scanning Frame

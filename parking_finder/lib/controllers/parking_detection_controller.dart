@@ -23,6 +23,15 @@ class ParkingDetectionController extends ChangeNotifier {
   Map<String, int> _lastStatus = {};
   int? _sensorOrientation;
   bool _isFrontCamera = false;
+  bool _dbSyncEnabled = false;
+  bool _autoLiveCalibrationEnabled = false;
+  DateTime? _lastCalibrateAt;
+  int _calibrateIntervalMs = 2500;
+  double _baselineMedianBrightness = 0.0;
+  double _driftThreshold = 8.0;
+  double _emaAlpha = 0.35;
+  Timer? _stillTimer;
+  int _stillIntervalMs = 900;
   
   // Image Mode State
   File? _selectedImageFile;
@@ -42,6 +51,8 @@ class ParkingDetectionController extends ChangeNotifier {
   double _innerPadding = 0.10;
   double _edgeRatioThreshold = 0.10;
   int _edgeMagThreshold = 40;
+  double _chromaThreshold = 30.0;
+  double _colorRatioThreshold = 0.20;
 
   List<ParkingSlot> get slots => _slots;
   CameraController? get cameraController => _cameraController;
@@ -59,6 +70,8 @@ class ParkingDetectionController extends ChangeNotifier {
   double get innerPadding => _innerPadding;
   double get edgeRatioThreshold => _edgeRatioThreshold;
   int get edgeMagThreshold => _edgeMagThreshold;
+  double get chromaThreshold => _chromaThreshold;
+  double get colorRatioThreshold => _colorRatioThreshold;
   double? get previewAspectRatio {
     final s = _cameraController?.value.previewSize;
     if (s != null) {
@@ -69,6 +82,8 @@ class ParkingDetectionController extends ChangeNotifier {
     }
     return null;
   }
+
+  bool get autoLiveCalibrationEnabled => _autoLiveCalibrationEnabled;
 
   ParkingDetectionController() {
     _initializeSlots();
@@ -108,6 +123,16 @@ class ParkingDetectionController extends ChangeNotifier {
 
   void setEdgeRatioThreshold(double v) {
     _edgeRatioThreshold = v.clamp(0.01, 0.5);
+    notifyListeners();
+  }
+
+  void setChromaThreshold(double v) {
+    _chromaThreshold = v.clamp(15.0, 120.0);
+    notifyListeners();
+  }
+
+  void setColorRatioThreshold(double v) {
+    _colorRatioThreshold = v.clamp(0.05, 0.80);
     notifyListeners();
   }
 
@@ -155,12 +180,16 @@ class ParkingDetectionController extends ChangeNotifier {
         camera,
         ResolutionPreset.medium,
         enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.yuv420,
+        imageFormatGroup: kIsWeb ? ImageFormatGroup.bgra8888 : ImageFormatGroup.yuv420,
       );
 
       await _cameraController?.initialize();
 
-      _cameraController?.startImageStream(_processCameraImage);
+      if (kIsWeb) {
+        _startStillCaptureLoop();
+      } else {
+        _cameraController?.startImageStream(_processCameraImage);
+      }
 
       notifyListeners();
     } catch (e) {
@@ -183,23 +212,25 @@ class ParkingDetectionController extends ChangeNotifier {
             } catch (_) {}
           });
 
-          for (final entry in newStatus.entries) {
-            final slotId = entry.key;
-            final occupied = entry.value == 1;
-            final index = _slots.indexWhere((s) => s.id == slotId);
-            if (index != -1) {
-              final prevOccupied = _slots[index].isOccupied;
-              if (prevOccupied && !occupied) {
-                NotificationService().showToast(
-                  title: 'Slot tersedia',
-                  message: 'Slot $slotId baru saja kosong',
-                  type: NotificationType.parkingAvailable,
-                  priority: NotificationPriority.high,
+          if (_dbSyncEnabled) {
+            for (final entry in newStatus.entries) {
+              final slotId = entry.key;
+              final occupied = entry.value == 1;
+              final index = _slots.indexWhere((s) => s.id == slotId);
+              if (index != -1) {
+                final prevOccupied = _slots[index].isOccupied;
+                if (prevOccupied && !occupied) {
+                  NotificationService().showToast(
+                    title: 'Slot tersedia',
+                    message: 'Slot $slotId baru saja kosong',
+                    type: NotificationType.parkingAvailable,
+                    priority: NotificationPriority.high,
+                  );
+                }
+                _slots[index] = _slots[index].copyWith(
+                  isOccupied: occupied,
                 );
               }
-              _slots[index] = _slots[index].copyWith(
-                isOccupied: occupied,
-              );
             }
           }
 
@@ -220,11 +251,55 @@ class ParkingDetectionController extends ChangeNotifier {
     _dbSubscription = null;
   }
 
+  Future<void> releaseCamera() async {
+    try {
+      if (_cameraController != null) {
+        if (_cameraController!.value.isStreamingImages) {
+          await _cameraController!.stopImageStream();
+        }
+        await _cameraController!.dispose();
+        _cameraController = null;
+      }
+      _stillTimer?.cancel();
+      _stillTimer = null;
+    } catch (e) {
+      debugPrint('Error releasing camera: $e');
+    }
+  }
+
+  void resetDetectionState({bool resetGrid = false}) {
+    _isImageMode = false;
+    _selectedImageFile = null;
+    _selectedImageBytes = null;
+    _decodedImage = null;
+    if (resetGrid) {
+      _generateSlotsFromGrid();
+    }
+    for (int i = 0; i < _slots.length; i++) {
+      final s = _slots[i];
+      _slots[i] = s.copyWith(
+        isOccupied: false,
+        currentBrightness: 0.0,
+        darkRatio: 0.0,
+        edgeDensity: 0.0,
+        sigma: 0.0,
+      );
+    }
+    _updateStats();
+    notifyListeners();
+  }
+
   void _processCameraImage(CameraImage image) {
     // Skip frames for performance
     _frameCount++;
     if (_frameCount % _processInterval != 0) return;
     if (_isProcessing) return;
+    if (image.planes.isEmpty || image.planes[0].bytes.isEmpty) {
+      if (kIsWeb) {
+        _startStillCaptureLoop();
+      }
+      return;
+    }
 
     _isProcessing = true;
     
@@ -241,9 +316,13 @@ class ParkingDetectionController extends ChangeNotifier {
         final double darkRatio = stats.$2;
         final double sigma = stats.$3;
         final double edgeDensity = _edgeDensityFromCamera(image, rect, _edgeMagThreshold);
+        final chromaStats = _calculateChromaStatsFromCamera(image, rect);
+        final double avgChroma = chromaStats.$1;
+        final double colorRatio = chromaStats.$2;
         final bool darknessOccupied = avgBrightness < (otsu - _statusMargin) || darkRatio > _occupancyRatio;
+        final bool colorOccupied = avgChroma > _chromaThreshold || colorRatio > _colorRatioThreshold;
         final bool textureOccupied = edgeDensity > _edgeRatioThreshold || sigma > _sigmaThreshold;
-        final bool candidateOccupied = darknessOccupied && textureOccupied;
+        final bool candidateOccupied = (darknessOccupied || colorOccupied) && textureOccupied;
         _slots[i] = slot.copyWith(
           currentBrightness: avgBrightness,
           threshold: otsu.toDouble(),
@@ -251,16 +330,51 @@ class ParkingDetectionController extends ChangeNotifier {
           darkRatio: darkRatio,
           edgeDensity: edgeDensity,
           sigma: sigma,
+          chroma: avgChroma,
+          colorRatio: colorRatio,
         );
       }
       
       _updateStats();
+      if (_autoLiveCalibrationEnabled) {
+        final List<double> b = _slots.map((s) => s.currentBrightness).toList();
+        final double medB = _percentile(b, 0.50);
+        final DateTime now = DateTime.now();
+        final bool timeOk = _lastCalibrateAt == null || now.difference(_lastCalibrateAt!).inMilliseconds >= _calibrateIntervalMs;
+        final bool driftOk = _baselineMedianBrightness == 0.0 || (medB - _baselineMedianBrightness).abs() >= _driftThreshold;
+        if (timeOk || driftOk) {
+          _autoCalibrateSmooth();
+          _lastCalibrateAt = now;
+          _baselineMedianBrightness = medB;
+        }
+      }
       notifyListeners();
     } catch (e) {
       debugPrint('Error processing frame: $e');
     } finally {
       _isProcessing = false;
     }
+  }
+
+  void _startStillCaptureLoop() {
+    if (_stillTimer != null) return;
+    if (_cameraController == null || !_cameraController!.value.isInitialized) return;
+    _stillTimer = Timer.periodic(Duration(milliseconds: _stillIntervalMs), (t) async {
+      if (_isProcessing) return;
+      try {
+        final XFile xf = await _cameraController!.takePicture();
+        final Uint8List bytes = await xf.readAsBytes();
+        final img.Image? decoded = img.decodeImage(bytes);
+        if (decoded != null) {
+          _isProcessing = true;
+          _processStaticImageAdaptive(decoded);
+          _isProcessing = false;
+          notifyListeners();
+        }
+      } catch (e) {
+        debugPrint('Still capture failed: $e');
+      }
+    });
   }
 
   double _calculateSlotBrightness(CameraImage image, Rect normalizedRect) {
@@ -302,11 +416,20 @@ class ParkingDetectionController extends ChangeNotifier {
     final List<int> hist = List<int>.filled(256, 0);
     int total = 0;
     final int step = math.max(2, (math.min(width, height) / 200).floor());
+    final int bppGuess = plane.bytesPerPixel ?? (plane.bytesPerRow ~/ math.max(1, width));
     for (int y = startY; y < endY; y += step) {
       for (int x = startX; x < endX; x += step) {
-        final int index = y * plane.bytesPerRow + x;
-        if (index < bytes.length) {
-          final int v = bytes[index];
+        final int base = y * plane.bytesPerRow + x * bppGuess;
+        if (base < bytes.length) {
+          int v;
+          if (bppGuess >= 3 && base + 2 < bytes.length) {
+            final int b = bytes[base];
+            final int g = bytes[base + 1];
+            final int r = bytes[base + 2];
+            v = ((r + g + b) ~/ 3);
+          } else {
+            v = bytes[base];
+          }
           hist[v]++;
           total++;
         }
@@ -330,11 +453,20 @@ class ParkingDetectionController extends ChangeNotifier {
     int dark = 0;
     int count = 0;
     final int step = math.max(2, (math.min(width, height) / 200).floor());
+    final int bppGuess = plane.bytesPerPixel ?? (plane.bytesPerRow ~/ math.max(1, width));
     for (int y = startY; y < endY; y += step) {
       for (int x = startX; x < endX; x += step) {
-        final int index = y * plane.bytesPerRow + x;
-        if (index < bytes.length) {
-          final int v = bytes[index];
+        final int base = y * plane.bytesPerRow + x * bppGuess;
+        if (base < bytes.length) {
+          int v;
+          if (bppGuess >= 3 && base + 2 < bytes.length) {
+            final int b = bytes[base];
+            final int g = bytes[base + 1];
+            final int r = bytes[base + 2];
+            v = ((r + g + b) ~/ 3);
+          } else {
+            v = bytes[base];
+          }
           sum += v;
           sumSq += v * v;
           if (v <= threshold) dark++;
@@ -350,14 +482,79 @@ class ParkingDetectionController extends ChangeNotifier {
     return (avg, darkRatio, sigma);
   }
 
+  (double, double) _calculateChromaStatsFromCamera(CameraImage image, Rect normalizedRect) {
+    final Plane p0 = image.planes[0];
+    final int width = image.width;
+    final int height = image.height;
+    final Rect sr = _edgeSampleRect(normalizedRect);
+    final Rect r = _transformRectForCamera(sr);
+    final int startX = (r.left * width).toInt().clamp(0, width - 1);
+    final int startY = (r.top * height).toInt().clamp(0, height - 1);
+    final int endX = (r.right * width).toInt().clamp(0, width - 1);
+    final int endY = (r.bottom * height).toInt().clamp(0, height - 1);
+    int count = 0;
+    int colored = 0;
+    double sumChroma = 0.0;
+    final int step = math.max(1, (math.min(width, height) / 300).floor());
+    final int bpr = p0.bytesPerRow;
+    final int bpp = p0.bytesPerPixel ?? (bpr ~/ math.max(1, width));
+    if (bpp >= 3) {
+      // RGBA/BGRA path: use saturation (max-min) as chroma
+      for (int y = startY; y < endY; y += step) {
+        for (int x = startX; x < endX; x += step) {
+          final int base = y * bpr + x * bpp;
+          if (base + 2 < p0.bytes.length) {
+            final int b = p0.bytes[base];
+            final int g = p0.bytes[base + 1];
+            final int r = p0.bytes[base + 2];
+            final int mx = math.max(r, math.max(g, b));
+            final int mn = math.min(r, math.min(g, b));
+            final int sat = mx - mn; // 0..255
+            sumChroma += sat.toDouble();
+            if (sat.toDouble() > _chromaThreshold) colored++;
+            count++;
+          }
+        }
+      }
+    } else {
+      // YUV path: use U/V
+      final Plane up = image.planes.length > 1 ? image.planes[1] : image.planes[0];
+      final Plane vp = image.planes.length > 2 ? image.planes[2] : image.planes[0];
+      final int ubpr = up.bytesPerRow;
+      final int vbpr = vp.bytesPerRow;
+      final int ubpp = up.bytesPerPixel ?? 1;
+      final int vbpp = vp.bytesPerPixel ?? 1;
+      for (int y = startY; y < endY; y += step) {
+        for (int x = startX; x < endX; x += step) {
+          final int ux = (x >> 1);
+          final int uy = (y >> 1);
+          final int ui = uy * ubpr + ux * ubpp;
+          final int vi = uy * vbpr + ux * vbpp;
+          if (ui < up.bytes.length && vi < vp.bytes.length) {
+            final int u = up.bytes[ui];
+            final int v = vp.bytes[vi];
+            final double chroma = math.sqrt(((u - 128) * (u - 128) + (v - 128) * (v - 128)).toDouble());
+            sumChroma += chroma;
+            if (chroma > _chromaThreshold) colored++;
+            count++;
+          }
+        }
+      }
+    }
+    if (count == 0) return (0.0, 0.0);
+    return (sumChroma / count, colored / count);
+  }
+
   void _updateStats() {
     _totalSlots = _slots.length;
     _filledSlots = _slots.where((s) => s.isOccupied).length;
     _emptySlots = _totalSlots - _filledSlots;
 
-    final id = _mapController?.selectedParking?.id;
-    if (id != null) {
-      _mapController?.updateParkingRealtime(id, _emptySlots, _totalSlots);
+    if (_dbSyncEnabled) {
+      final id = _mapController?.selectedParking?.id;
+      if (id != null) {
+        _mapController?.updateParkingRealtime(id, _emptySlots, _totalSlots);
+      }
     }
   }
 
@@ -383,10 +580,18 @@ class ParkingDetectionController extends ChangeNotifier {
     _selectedImageFile = File(path);
     _selectedImageBytes = null;
     
-    // Stop camera if running
-    if (_cameraController != null && _cameraController!.value.isStreamingImages) {
-      await _cameraController!.stopImageStream();
+    // Nonaktifkan kamera live (stream atau still-capture)
+    if (_cameraController != null) {
+      try {
+        if (_cameraController!.value.isStreamingImages) {
+          await _cameraController!.stopImageStream();
+        }
+        await _cameraController!.dispose();
+      } catch (_) {}
+      _cameraController = null;
     }
+    _stillTimer?.cancel();
+    _stillTimer = null;
     
     _isProcessing = true;
     notifyListeners();
@@ -411,9 +616,18 @@ class ParkingDetectionController extends ChangeNotifier {
     _selectedImageBytes = bytes;
     _selectedImageFile = null;
 
-    if (_cameraController != null && _cameraController!.value.isStreamingImages) {
-      await _cameraController!.stopImageStream();
+    // Nonaktifkan kamera live (stream atau still-capture)
+    if (_cameraController != null) {
+      try {
+        if (_cameraController!.value.isStreamingImages) {
+          await _cameraController!.stopImageStream();
+        }
+        await _cameraController!.dispose();
+      } catch (_) {}
+      _cameraController = null;
     }
+    _stillTimer?.cancel();
+    _stillTimer = null;
 
     _isProcessing = true;
     notifyListeners();
@@ -436,6 +650,7 @@ class ParkingDetectionController extends ChangeNotifier {
     _selectedImageFile = null;
     _decodedImage = null;
     _selectedImageBytes = null;
+    resetDetectionState();
     if (_cameraController != null && !_cameraController!.value.isStreamingImages) {
         // Restart camera stream if it was stopped
         // Ideally we might need to re-initialize or just start stream
@@ -570,16 +785,39 @@ class ParkingDetectionController extends ChangeNotifier {
     int edges = 0;
     int count = 0;
     final int step = math.max(2, (math.min(width, height) / 300).floor());
+    final int bppGuess = plane.bytesPerPixel ?? (plane.bytesPerRow ~/ math.max(1, width));
     for (int y = startY; y < endY; y += step) {
       for (int x = startX; x < endX; x += step) {
-        int p00 = bytes[(y - 1) * plane.bytesPerRow + (x - 1)];
-        int p10 = bytes[(y - 1) * plane.bytesPerRow + x];
-        int p20 = bytes[(y - 1) * plane.bytesPerRow + (x + 1)];
-        int p01 = bytes[y * plane.bytesPerRow + (x - 1)];
-        int p21 = bytes[y * plane.bytesPerRow + (x + 1)];
-        int p02 = bytes[(y + 1) * plane.bytesPerRow + (x - 1)];
-        int p12 = bytes[(y + 1) * plane.bytesPerRow + x];
-        int p22 = bytes[(y + 1) * plane.bytesPerRow + (x + 1)];
+        int base00 = (y - 1) * plane.bytesPerRow + (x - 1) * bppGuess;
+        int base10 = (y - 1) * plane.bytesPerRow + x * bppGuess;
+        int base20 = (y - 1) * plane.bytesPerRow + (x + 1) * bppGuess;
+        int base01 = y * plane.bytesPerRow + (x - 1) * bppGuess;
+        int base21 = y * plane.bytesPerRow + (x + 1) * bppGuess;
+        int base02 = (y + 1) * plane.bytesPerRow + (x - 1) * bppGuess;
+        int base12 = (y + 1) * plane.bytesPerRow + x * bppGuess;
+        int base22 = (y + 1) * plane.bytesPerRow + (x + 1) * bppGuess;
+        int p00 = 0, p10 = 0, p20 = 0, p01 = 0, p21 = 0, p02 = 0, p12 = 0, p22 = 0;
+        if (base00 >= 0 && base22 + 2 < bytes.length) {
+          if (bppGuess >= 3) {
+            p00 = ((bytes[base00 + 2] + bytes[base00 + 1] + bytes[base00]) ~/ 3);
+            p10 = ((bytes[base10 + 2] + bytes[base10 + 1] + bytes[base10]) ~/ 3);
+            p20 = ((bytes[base20 + 2] + bytes[base20 + 1] + bytes[base20]) ~/ 3);
+            p01 = ((bytes[base01 + 2] + bytes[base01 + 1] + bytes[base01]) ~/ 3);
+            p21 = ((bytes[base21 + 2] + bytes[base21 + 1] + bytes[base21]) ~/ 3);
+            p02 = ((bytes[base02 + 2] + bytes[base02 + 1] + bytes[base02]) ~/ 3);
+            p12 = ((bytes[base12 + 2] + bytes[base12 + 1] + bytes[base12]) ~/ 3);
+            p22 = ((bytes[base22 + 2] + bytes[base22 + 1] + bytes[base22]) ~/ 3);
+          } else {
+            p00 = bytes[base00];
+            p10 = bytes[base10];
+            p20 = bytes[base20];
+            p01 = bytes[base01];
+            p21 = bytes[base21];
+            p02 = bytes[base02];
+            p12 = bytes[base12];
+            p22 = bytes[base22];
+          }
+        }
         int gx = -p00 + p20 - 2 * p01 + 2 * p21 - p02 + p22;
         int gy = -p00 - 2 * p10 - p20 + p02 + 2 * p12 + p22;
         double mag = math.sqrt((gx * gx + gy * gy).toDouble());
@@ -680,6 +918,91 @@ class ParkingDetectionController extends ChangeNotifier {
       _processStaticImageAdaptive(_decodedImage!, occupancyRatio: occupancyRatio);
       notifyListeners();
     }
+  }
+
+  void setDbSyncEnabled(bool enabled) {
+    _dbSyncEnabled = enabled;
+  }
+
+  double _percentile(List<double> values, double p) {
+    if (values.isEmpty) return 0.0;
+    final v = List<double>.from(values)..sort();
+    final idx = (p * (v.length - 1)).clamp(0.0, v.length - 1.0).round();
+    return v[idx];
+  }
+
+  void autoCalibrateFromLiveMetrics() {
+    final ds = _slots.map((s) => s.darkRatio).where((v) => v > 0).toList();
+    final es = _slots.map((s) => s.edgeDensity).where((v) => v > 0).toList();
+    final ss = _slots.map((s) => s.sigma).where((v) => v > 0).toList();
+    final cs = _slots.map((s) => s.chroma).where((v) => v > 0).toList();
+    final rs = _slots.map((s) => s.colorRatio).where((v) => v > 0).toList();
+    if (ds.isEmpty || es.isEmpty || ss.isEmpty) return;
+    final medD = _percentile(ds, 0.50);
+    final medE = _percentile(es, 0.50);
+    final medS = _percentile(ss, 0.50);
+    final medC = cs.isNotEmpty ? _percentile(cs, 0.50) : _chromaThreshold;
+    final medR = rs.isNotEmpty ? _percentile(rs, 0.50) : _colorRatioThreshold;
+    _occupancyRatio = medD + 0.05;
+    _edgeRatioThreshold = medE + 0.05;
+    _sigmaThreshold = medS + 10.0;
+    _chromaThreshold = medC;
+    _colorRatioThreshold = (medR + 0.05).clamp(0.05, 0.80);
+    _occupancyRatio = _occupancyRatio.clamp(0.15, 0.55);
+    _edgeRatioThreshold = _edgeRatioThreshold.clamp(0.05, 0.30);
+    _sigmaThreshold = _sigmaThreshold.clamp(5.0, 120.0);
+    for (int i = 0; i < _slots.length; i++) {
+      final s = _slots[i];
+      final darknessOccupied = s.currentBrightness < (s.threshold - _statusMargin) || s.darkRatio > _occupancyRatio;
+      final bool colorOccupied = s.chroma > _chromaThreshold || s.colorRatio > _colorRatioThreshold;
+      final textureOccupied = s.edgeDensity > _edgeRatioThreshold || s.sigma > _sigmaThreshold;
+      final occ = (darknessOccupied || colorOccupied) && textureOccupied;
+      _slots[i] = s.copyWith(isOccupied: occ);
+    }
+    _updateStats();
+    notifyListeners();
+  }
+
+  void setAutoLiveCalibrationEnabled(bool enabled) {
+    _autoLiveCalibrationEnabled = enabled;
+    if (enabled) {
+      _lastCalibrateAt = null;
+      _baselineMedianBrightness = 0.0;
+    }
+    notifyListeners();
+  }
+
+  void _autoCalibrateSmooth() {
+    final ds = _slots.map((s) => s.darkRatio).where((v) => v > 0).toList();
+    final es = _slots.map((s) => s.edgeDensity).where((v) => v > 0).toList();
+    final ss = _slots.map((s) => s.sigma).where((v) => v > 0).toList();
+    final cs = _slots.map((s) => s.chroma).where((v) => v > 0).toList();
+    final rs = _slots.map((s) => s.colorRatio).where((v) => v > 0).toList();
+    if (ds.isEmpty || es.isEmpty || ss.isEmpty) return;
+    final double medD = _percentile(ds, 0.50);
+    final double medE = _percentile(es, 0.50);
+    final double medS = _percentile(ss, 0.50);
+    final double medC = cs.isNotEmpty ? _percentile(cs, 0.50) : _chromaThreshold;
+    final double medR = rs.isNotEmpty ? _percentile(rs, 0.50) : _colorRatioThreshold;
+    double targetOcc = (medD + 0.05).clamp(0.15, 0.55);
+    double targetEdge = (medE + 0.05).clamp(0.05, 0.30);
+    double targetSigma = (medS + 10.0).clamp(5.0, 120.0);
+    double targetChroma = medC.clamp(15.0, 120.0);
+    double targetColorRatio = (medR + 0.05).clamp(0.05, 0.80);
+    _occupancyRatio = _occupancyRatio * (1 - _emaAlpha) + targetOcc * _emaAlpha;
+    _edgeRatioThreshold = _edgeRatioThreshold * (1 - _emaAlpha) + targetEdge * _emaAlpha;
+    _sigmaThreshold = _sigmaThreshold * (1 - _emaAlpha) + targetSigma * _emaAlpha;
+    _chromaThreshold = _chromaThreshold * (1 - _emaAlpha) + targetChroma * _emaAlpha;
+    _colorRatioThreshold = _colorRatioThreshold * (1 - _emaAlpha) + targetColorRatio * _emaAlpha;
+    for (int i = 0; i < _slots.length; i++) {
+      final s = _slots[i];
+      final bool darknessOccupied = s.currentBrightness < (s.threshold - _statusMargin) || s.darkRatio > _occupancyRatio;
+      final bool colorOccupied = s.chroma > _chromaThreshold || s.colorRatio > _colorRatioThreshold;
+      final bool textureOccupied = s.edgeDensity > _edgeRatioThreshold || s.sigma > _sigmaThreshold;
+      final bool occ = (darknessOccupied || colorOccupied) && textureOccupied;
+      _slots[i] = s.copyWith(isOccupied: occ);
+    }
+    _updateStats();
   }
 
   Future<int> countEmptySlotsFromFile(String path) async {

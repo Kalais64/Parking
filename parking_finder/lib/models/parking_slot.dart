@@ -10,6 +10,8 @@ class ParkingSlot {
   double darkRatio;
   double edgeDensity;
   double sigma;
+  double chroma;
+  double colorRatio;
 
   ParkingSlot({
     required this.id,
@@ -20,6 +22,8 @@ class ParkingSlot {
     this.darkRatio = 0.0,
     this.edgeDensity = 0.0,
     this.sigma = 0.0,
+    this.chroma = 0.0,
+    this.colorRatio = 0.0,
   });
 
   // Create a copy with updated status
@@ -31,6 +35,8 @@ class ParkingSlot {
     double? darkRatio,
     double? edgeDensity,
     double? sigma,
+    double? chroma,
+    double? colorRatio,
   }) {
     return ParkingSlot(
       id: id,
@@ -41,6 +47,8 @@ class ParkingSlot {
       darkRatio: darkRatio ?? this.darkRatio,
       edgeDensity: edgeDensity ?? this.edgeDensity,
       sigma: sigma ?? this.sigma,
+      chroma: chroma ?? this.chroma,
+      colorRatio: colorRatio ?? this.colorRatio,
     );
   }
 }
